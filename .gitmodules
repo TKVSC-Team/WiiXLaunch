@@ -1,0 +1,12 @@
+[submodule "vendor/exlaunch"]
+	path = vendor/exlaunch
+	url = https://github.com/shadowninja108/exlaunch.git
+[submodule "vendor/wut"]
+	path = vendor/wut
+	url = https://github.com/devkitPro/wut.git
+[submodule "vendor/wups"]
+	path = vendor/wups
+	url = https://github.com/wiiu-env/WiiUPluginSystem.git
+[submodule "vendor/libfunctionpatcher"]
+	path = vendor/libfunctionpatcher
+	url = https://github.com/wiiu-env/libfunctionpatcher.git
