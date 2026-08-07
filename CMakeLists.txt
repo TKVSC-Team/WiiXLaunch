@@ -1,4 +1,25 @@
 cmake_minimum_required(VERSION 3.15)
+# Option to select target platform
+if(NOT DEFINED PLATFORM)
+    if(DEFINED SWITCH)
+        set(PLATFORM "SWITCH")
+    elseif(DEFINED WIIU)
+        set(PLATFORM "WIIU")
+    elseif(DEFINED CEMU)
+        set(PLATFORM "CEMU")
+    else()
+        message(STATUS "No PLATFORM specified. Defaulting to SWITCH (Use -DPLATFORM=SWITCH, -DPLATFORM=WIIU, or -DPLATFORM=CEMU)")
+        set(PLATFORM "SWITCH")
+    endif()
+endif()
+
+if(PLATFORM STREQUAL "CEMU" OR PLATFORM STREQUAL "WIIU")
+    set(CMAKE_SYSTEM_NAME Generic)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "STATIC_LIBRARY")
+    set(CMAKE_C_COMPILER powerpc-eabi-gcc)
+    set(CMAKE_CXX_COMPILER powerpc-eabi-g++)
+endif()
+
 project(WiiXLaunch C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -10,18 +31,6 @@ execute_process(
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     RESULT_VARIABLE CONFIG_GEN_RESULT
 )
-
-# Option to select target platform
-if(NOT DEFINED PLATFORM)
-    if(DEFINED SWITCH)
-        set(PLATFORM "SWITCH")
-    elseif(DEFINED WIIU)
-        set(PLATFORM "WIIU")
-    else()
-        message(STATUS "No PLATFORM specified. Defaulting to SWITCH (Use -DPLATFORM=SWITCH or -DPLATFORM=WIIU)")
-        set(PLATFORM "SWITCH")
-    endif()
-endif()
 
 # Include directories: Order matters! build/generated/include shadows vendor/exlaunch headers cleanly
 include_directories(
@@ -57,8 +66,26 @@ elseif(PLATFORM STREQUAL "WIIU")
     add_library(wiixlaunch_wiiu SHARED ${SOURCES})
     target_link_libraries(wiixlaunch_wiiu PRIVATE)
 
+elseif(PLATFORM STREQUAL "CEMU")
+    message(STATUS "Building WiiXLaunch for Cemu Code Cave (PowerPC)")
+    add_compile_definitions(__CEMU__=1 WIIXL_CEMU=1)
+
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIE -msdata=none")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIE -msdata=none")
+    set(CMAKE_EXE_LINKER_FLAGS "-nostartfiles -T ${CMAKE_CURRENT_SOURCE_DIR}/scripts/cemu.ld -Wl,-q")
+
+    file(GLOB_RECURSE SOURCES "src/*.cpp")
+    
+    set(TARGET_CEMU wiixlaunch_cemu)
+    add_executable(${TARGET_CEMU} ${SOURCES})
+
+    add_custom_command(TARGET ${TARGET_CEMU} POST_BUILD
+        COMMAND powerpc-eabi-objcopy -O binary --set-section-flags .bss=alloc,load,contents $<TARGET_FILE:${TARGET_CEMU}> ${CMAKE_BINARY_DIR}/payload.bin
+        COMMENT "Extracting raw binary for Cemu Graphic Pack..."
+    )
+
 else()
-    message(FATAL_ERROR "Unknown PLATFORM: ${PLATFORM}. Must be SWITCH or WIIU.")
+    message(FATAL_ERROR "Unknown PLATFORM: ${PLATFORM}. Must be SWITCH, WIIU, or CEMU.")
 endif()
 
 # Post-build deployment step

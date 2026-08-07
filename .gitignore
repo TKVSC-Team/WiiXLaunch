@@ -1,0 +1,11 @@
+build/
+build_cemu/
+build_switch/
+build_wiiu/
+deploy/
+*.s
+*.bin
+*.elf
+*.o
+*.obj
+.DS_Store

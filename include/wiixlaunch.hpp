@@ -5,5 +5,3 @@
 #include "wiixlaunch/context.hpp"
 #include "wiixlaunch/patch.hpp"
 #include "wiixlaunch/hook.hpp"
-
-// Main umbrella header for WiiXLaunch mods

@@ -2,26 +2,29 @@
 
 #include <cstdint>
 
-// ---------------------------------------------------------
-// Platform Detection & Architecture Flags
-// ---------------------------------------------------------
 #if defined(__SWITCH__) || defined(NN_NINTENDO_SDK) || defined(__aarch64__)
     #define WIIXL_SWITCH 1
     #define WIIXL_WIIU   0
     #define WIIXL_64BIT  1
     #define WIIXL_32BIT  0
-#elif defined(__WIIU__) || defined(WUT) || defined(__PPC__) || defined(GEKKO)
+#elif defined(__WIIU__) || defined(WUT) || (defined(__PPC__) && !defined(__CEMU__)) || defined(GEKKO)
     #define WIIXL_SWITCH 0
     #define WIIXL_WIIU   1
+    #define WIIXL_CEMU   0
+    #define WIIXL_64BIT  0
+    #define WIIXL_32BIT  1
+#elif defined(__CEMU__)
+    #define WIIXL_SWITCH 0
+    #define WIIXL_WIIU   0
+    #define WIIXL_CEMU   1
     #define WIIXL_64BIT  0
     #define WIIXL_32BIT  1
 #else
-    #error "WiiXLaunch: Unsupported target platform! Must compile for Switch (AArch64) or Wii U (PowerPC)."
+    #error "WiiXLaunch: Unsupported target platform! Must compile for Switch, Wii U, or Cemu."
 #endif
 
 namespace WiiXLaunch {
 
-// Unsigned pointer-sized integer
 #if WIIXL_SWITCH
     using uptr = uint64_t;
     constexpr bool IsBigEndian = false;
@@ -30,7 +33,6 @@ namespace WiiXLaunch {
     constexpr bool IsBigEndian = true;
 #endif
 
-// Endianness Utilities
 inline uint16_t Swap16(uint16_t val) {
     return (val << 8) | (val >> 8);
 }
@@ -44,7 +46,7 @@ inline uint32_t Swap32(uint32_t val) {
 
 inline uint32_t ToHost32(uint32_t val) {
 #if WIIXL_WIIU
-    return val; // Big Endian on PPC
+    return val;
 #else
     return Swap32(val);
 #endif
