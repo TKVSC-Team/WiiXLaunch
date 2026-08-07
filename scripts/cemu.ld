@@ -28,6 +28,9 @@ SECTIONS
         *(.sbss*)
     }
 
+    PROVIDE(__end__ = .);
+    PROVIDE(end = .);
+
     .rela.text : { *(.rela.text .rela.text.* .rela.gnu.linkonce.t.*) }
     .rela.data : { *(.rela.data .rela.data.* .rela.gnu.linkonce.d.*) }
     .rela.rodata : { *(.rela.rodata .rela.rodata.* .rela.gnu.linkonce.r.*) }

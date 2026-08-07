@@ -145,11 +145,11 @@ version = 7
         cemu_asm_content += "  mflr r9\n"
         
         binary_offset_from_table = binary_size + 40
-        binary_offset_ha = (binary_offset_from_table + 0x8000) >> 16
+        binary_offset_h = binary_offset_from_table >> 16
         binary_offset_l = binary_offset_from_table & 0xFFFF
         
-        cemu_asm_content += f"  lis r12, 0x{binary_offset_ha:04X}\n"
-        cemu_asm_content += f"  addi r12, r12, 0x{binary_offset_l:04X}\n"
+        cemu_asm_content += f"  lis r12, 0x{binary_offset_h:04X}\n"
+        cemu_asm_content += f"  ori r12, r12, 0x{binary_offset_l:04X}\n"
         cemu_asm_content += f"  subf r8, r12, r9\n"
         
         cemu_asm_content += "  lwz r10, -4(r8)\n"
@@ -159,10 +159,10 @@ version = 7
         cemu_asm_content += "  stw r10, -4(r8)\n"
         
         if num_relocs > 0:
-            num_relocs_ha = (num_relocs + 0x8000) >> 16
+            num_relocs_h = num_relocs >> 16
             num_relocs_l = num_relocs & 0xFFFF
-            cemu_asm_content += f"  lis r12, 0x{num_relocs_ha:04X}\n"
-            cemu_asm_content += f"  addi r12, r12, 0x{num_relocs_l:04X}\n"
+            cemu_asm_content += f"  lis r12, 0x{num_relocs_h:04X}\n"
+            cemu_asm_content += f"  ori r12, r12, 0x{num_relocs_l:04X}\n"
             cemu_asm_content += "  mtctr r12\n"
             
             cemu_asm_content += "wiixlaunch_reloc_loop:\n"
