@@ -34,6 +34,17 @@ namespace Backend {
         *(volatile uint32_t*)addr = 0x60000000;
     }
 
+    inline void FlushCache(uintptr_t addr, size_t size = 4) {
+        uintptr_t p = addr & ~31;
+        uintptr_t end = addr + size;
+        for (; p < end; p += 32) {
+            asm volatile("dcbst 0, %0" : : "r"(p));
+            asm volatile("sync");
+            asm volatile("icbi 0, %0" : : "r"(p));
+        }
+        asm volatile("isync");
+    }
+
     inline void Branch(uintptr_t addr, uintptr_t dest, bool link = false) {
         uint32_t delta = dest - addr;
         uint32_t insn = 0x48000000 | (delta & 0x03FFFFFC);
@@ -41,6 +52,7 @@ namespace Backend {
             insn |= 1;
         }
         *(volatile uint32_t*)addr = insn;
+        FlushCache(addr, 4);
     }
 
     template <typename Callback, typename Original>
@@ -55,6 +67,7 @@ namespace Backend {
         uint32_t trampAddr = reinterpret_cast<uintptr_t>(&tramp[1]);
         uint32_t delta = returnAddr - trampAddr;
         tramp[1] = 0x48000000 | (delta & 0x03FFFFFC);
+        FlushCache(reinterpret_cast<uintptr_t>(tramp), 8);
 
         *originalOut = reinterpret_cast<Original>(tramp);
 
