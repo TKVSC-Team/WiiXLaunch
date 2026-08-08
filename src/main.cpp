@@ -46,9 +46,10 @@ static uint32_t g_LogFrame = 0;
 // the canonical VPAD-style bitspace that ProcessWiiUInput/freecam logic expects.
 enum class PadSource { VPAD, WPAD_PRO, WPAD_CORE };
 
+// TranslateToCanonical is only used for Wii U / Cemu builds. Exclude on Switch
+#if !WIIXL_SWITCH
 static uint32_t TranslateToCanonical(uint32_t rawHold, PadSource src) {
     uint32_t out = 0;
-#if !WIIXL_SWITCH
     switch (src) {
         case PadSource::VPAD:
             return rawHold; // already canonical
@@ -68,9 +69,9 @@ static uint32_t TranslateToCanonical(uint32_t rawHold, PadSource src) {
             if (rawHold & WPAD_CORE_DDOWN) out |= BTN_DDOWN;
             return out;
     }
-#endif
     return rawHold;
 }
+#endif
 
 // ----------------------------------------------------------------------------
 // 1. Switch Input Hooks (nn::hid::GetNpadStates)
@@ -78,21 +79,23 @@ static uint32_t TranslateToCanonical(uint32_t rawHold, PadSource src) {
 #if WIIXL_SWITCH
 struct NpadState {
     int64_t updateCount;
-    uint32_t Buttons;
-    uint32_t LStickX;
-    uint32_t LStickY;
-    uint32_t RStickX;
-    uint32_t RStickY;
+    uint64_t Buttons;
+    int32_t LStickX;
+    int32_t LStickY;
+    int32_t RStickX;
+    int32_t RStickY;
     uint32_t Flags;
+    uint32_t Reserved;
 };
 
 static void ProcessNpadState(NpadState* state) {
     if (!state) return;
-    g_ButtonsHold = state->Buttons;
-    float lx = static_cast<float>(static_cast<int32_t>(state->LStickX)) / 32767.0f;
-    float ly = static_cast<float>(static_cast<int32_t>(state->LStickY)) / 32767.0f;
-    float rx = static_cast<float>(static_cast<int32_t>(state->RStickX)) / 32767.0f;
-    float ry = static_cast<float>(static_cast<int32_t>(state->RStickY)) / 32767.0f;
+    g_ButtonsHold = static_cast<uint32_t>(state->Buttons);
+
+    float lx = static_cast<float>(state->LStickX) / 32767.0f;
+    float ly = static_cast<float>(state->LStickY) / 32767.0f;
+    float rx = static_cast<float>(state->RStickX) / 32767.0f;
+    float ry = static_cast<float>(state->RStickY) / 32767.0f;
 
     g_LeftStickX  = (std::abs(lx) > 0.1f) ? lx : 0.0f;
     g_LeftStickY  = (std::abs(ly) > 0.1f) ? ly : 0.0f;
@@ -100,7 +103,7 @@ static void ProcessNpadState(NpadState* state) {
     g_RightStickY = (std::abs(ry) > 0.1f) ? ry : 0.0f;
 
     static bool s_LastCombo = false;
-    bool combo = ((g_ButtonsHold & BTN_ZL) != 0) && ((g_ButtonsHold & BTN_DDOWN) != 0);
+    bool combo = ((state->Buttons & BTN_ZL) != 0) && ((state->Buttons & BTN_DDOWN) != 0);
     if (combo && !s_LastCombo) {
         g_FreecamActive = !g_FreecamActive;
         g_CamInitialized = false;
@@ -141,7 +144,7 @@ extern "C" void Cemu_Log1(const char* fmt, uint32_t val) {
 
 static void ProcessWiiUInput(uint32_t hold, float lx, float ly, float rx, float ry) {
     g_ButtonsHold = hold;
-    lx = -lx;
+
     rx = -rx;
 
     g_LeftStickX  = (std::abs(lx) > 0.1f) ? lx : 0.0f;
@@ -254,7 +257,7 @@ WIIXL_HOOK_DEFINE_TRAMPOLINE(LookAtCameraHook) {
         }
 
         const float SENSITIVITY_LOOK = 0.0125f;
-        const float SENSITIVITY_MOVE = 1.5f;
+        const float SENSITIVITY_MOVE = 1.0f;
 
         s_Yaw   += g_RightStickX * SENSITIVITY_LOOK;
         s_Pitch += g_RightStickY * SENSITIVITY_LOOK;
@@ -382,10 +385,10 @@ WIIXL_HOOK_DEFINE_TRAMPOLINE(LookAtCameraHook) {
             WIIXL_LOG(LOG_TAG_CAM_INIT, g_LogFrame, hDist, s_Yaw, s_Pitch, 0, 0);
         }
 
-        const float SENSITIVITY_LOOK = 0.0125f;
-        const float SENSITIVITY_MOVE = 1.5f;
+        const float SENSITIVITY_LOOK = 0.003125;
+        const float SENSITIVITY_MOVE = 0.25f;
 
-        s_Yaw   += -g_RightStickX * SENSITIVITY_LOOK;
+        s_Yaw   += g_RightStickX * SENSITIVITY_LOOK;
         s_Pitch += g_RightStickY * SENSITIVITY_LOOK;
 
         if (s_Pitch >  1.57f) s_Pitch =  1.57f;
