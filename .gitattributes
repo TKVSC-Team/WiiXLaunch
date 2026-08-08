@@ -1,0 +1,10 @@
+# Shell scripts must stay LF - bash rejects CRLF - regardless of the
+# cloning machine's core.autocrlf setting.
+*.sh text eol=lf
+# Batch files are happiest with CRLF.
+*.bat text eol=crlf
+# Never normalize prebuilt binaries.
+*.wps -text
+*.nso -text
+subsdk9 -text
+*.npdm -text

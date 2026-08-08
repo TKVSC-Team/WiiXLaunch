@@ -1,6 +1,9 @@
 @echo off
 setlocal
 
+call scripts\devkitpro_env.bat
+if errorlevel 1 exit /b 1
+
 echo Generating config...
 python scripts\generate_config.py
 if errorlevel 1 exit /b 1
@@ -30,7 +33,7 @@ powershell -Command "(Get-Content '%STAGE%\source\lib\hook\nx64\hook_impl.cpp') 
 :: Build via devkitPro's msys2 so DEVKITA64 and the switch rules resolve
 echo Building for Switch (ARM64)...
 set STAGEFWD=%STAGE:\=/%
-C:\devkitPro\msys2\usr\bin\bash.exe -lc "cd '%STAGEFWD%' && make"
+"%DKP_BASH%" -lc "cd '%STAGEFWD%' && make"
 if errorlevel 1 exit /b 1
 
 :: Extract artifacts

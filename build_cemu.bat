@@ -1,6 +1,9 @@
 @echo off
 setlocal
 
+call scripts\devkitpro_env.bat
+if errorlevel 1 exit /b 1
+
 echo Generating config...
 python scripts\generate_config.py
 if errorlevel 1 exit /b 1
@@ -16,7 +19,7 @@ echo Building Cemu payload (PowerPC)...
 :: No -g: the payload ships as a raw binary (debug info is useless) and debug
 :: sections add .rela.debug_* entries that the deploy-time relocator must not
 :: see (it now filters them, but there is no reason to generate them at all).
-C:\devkitPro\devkitPPC\bin\powerpc-eabi-g++.exe ^
+"%DKP_PPC_GXX%" ^
   -std=gnu++20 -fPIE -msdata=none ^
   -D__CEMU__=1 -DWIIXL_CEMU=1 ^
   -I include -I build\generated\include ^

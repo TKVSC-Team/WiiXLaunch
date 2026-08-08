@@ -1,6 +1,9 @@
 @echo off
 setlocal
 
+call scripts\devkitpro_env.bat
+if errorlevel 1 exit /b 1
+
 echo Generating config...
 python scripts\generate_config.py
 if errorlevel 1 exit /b 1
@@ -21,7 +24,7 @@ copy /y scripts\wiiu\Makefile "%STAGE%\Makefile" > nul
 :: installed from vendor/ (make install into /opt/devkitpro/wups and /wums).
 echo Building for Wii U (PowerPC)...
 set STAGEFWD=%STAGE:\=/%
-C:\devkitPro\msys2\usr\bin\bash.exe -lc "cd '%STAGEFWD%' && make"
+"%DKP_BASH%" -lc "cd '%STAGEFWD%' && make"
 if errorlevel 1 exit /b 1
 
 if not exist build\wiiu mkdir build\wiiu

@@ -7,6 +7,36 @@ import sys
 import subprocess
 import struct
 
+def find_devkitppc_tool(name):
+    """Resolve a devkitPPC binary without hardcoding the install location.
+
+    Order: PATH, then $DEVKITPRO_WIN (Windows-path override used by the .bat
+    scripts too), then the platform-default install roots. The DEVKITPRO env
+    var itself is usually the msys2-style /opt/devkitpro, which only resolves
+    inside devkitPro's msys2 - it is still tried last in case this script runs
+    in such a shell.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+
+    exe = name + (".exe" if os.name == "nt" else "")
+    roots = [os.environ.get("DEVKITPRO_WIN"),
+             "C:\\devkitPro" if os.name == "nt" else None,
+             "/opt/devkitpro",
+             os.environ.get("DEVKITPRO")]
+    for root in roots:
+        if not root:
+            continue
+        candidate = os.path.join(root, "devkitPPC", "bin", exe)
+        if os.path.exists(candidate):
+            return candidate
+
+    raise RuntimeError(
+        f"Cannot find {name}. Install devkitPPC (devkitPro) or set "
+        f"DEVKITPRO_WIN to your devkitPro install directory.")
+
+
 def main():
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(root_dir, "wiixlaunch.json")
@@ -87,11 +117,8 @@ version = 7
     elf_path = os.path.join(root_dir, "build", "wiixlaunch_cemu")
     if os.path.exists(elf_path):
         bin_path = os.path.join(root_dir, "build", "payload.bin")
-        objcopy_cmd = "powerpc-eabi-objcopy"
-        readelf_cmd = "powerpc-eabi-readelf"
-        if os.name == "nt":
-            objcopy_cmd = "C:\\devkitPro\\devkitPPC\\bin\\powerpc-eabi-objcopy.exe"
-            readelf_cmd = "C:\\devkitPro\\devkitPPC\\bin\\powerpc-eabi-readelf.exe"
+        objcopy_cmd = find_devkitppc_tool("powerpc-eabi-objcopy")
+        readelf_cmd = find_devkitppc_tool("powerpc-eabi-readelf")
             
         subprocess.run([objcopy_cmd, "-O", "binary", "--set-section-flags", ".bss=alloc,load,contents", elf_path, bin_path], check=True)
         with open(bin_path, "rb") as f:
