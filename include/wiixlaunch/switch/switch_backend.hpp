@@ -9,7 +9,6 @@
 namespace WiiXLaunch::Backend {
 
     inline bool InitSwitchBackend() {
-        // ExLaunch handles its own initialization via Atmosphere subsdk entrypoint
         return true;
     }
 
@@ -22,19 +21,16 @@ namespace WiiXLaunch::Backend {
         }
     }
 
-} // namespace WiiXLaunch::Backend
+}
 
-#endif // WIIXL_SWITCH
+#endif
 
 #if WIIXL_SWITCH
-// Export ExLaunch entrypoints
+
 extern "C" void WiiXLaunch_Init();
 
 extern "C" void exl_main(void* x0, void* x1) {
-    // Setup ExLaunch hooking environment
     exl::hook::Initialize();
-    
-    // Call the unified init function
     WiiXLaunch_Init();
 }
 
