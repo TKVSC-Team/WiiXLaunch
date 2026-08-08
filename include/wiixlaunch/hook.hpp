@@ -107,4 +107,4 @@ namespace WiiXLaunch::impl {
     template<typename Derived>
     class TrampolineHookBase : public ReplaceHookBase<Derived> {};
 
-} // namespace WiiXLaunch::impl
+}
