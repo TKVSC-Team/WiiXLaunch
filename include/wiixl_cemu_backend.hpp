@@ -55,19 +55,44 @@ namespace Backend {
         FlushCache(addr, 4);
     }
 
+    // A plain `b`/`ba` only has a 24-bit word-granular field: +-32MB reach for
+    // a relative branch, or the low/high 32MB absolute windows for `ba`. The
+    // codecave's address is chosen by Cemu/the graphic pack at runtime and can
+    // land arbitrarily far from a given hook target - Branch()'s naive
+    // `delta & 0x03FFFFFC` masking silently truncates an out-of-range delta
+    // into a garbage target instead of failing loudly, which crashed Cemu's
+    // recompiler the first time a hook target happened to be far enough away
+    // (~40MB) to hit this. WriteLongJump has unlimited reach in both
+    // directions since it loads the full 32-bit destination into r12 and
+    // branches through CTR rather than encoding a relative/absolute offset.
+    inline void WriteLongJump(uintptr_t addr, uintptr_t dest) {
+        uint32_t hi = static_cast<uint32_t>(dest) >> 16;
+        uint32_t lo = static_cast<uint32_t>(dest) & 0xFFFF;
+        volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(addr);
+        p[0] = 0x3D800000 | hi;  // lis  r12, hi
+        p[1] = 0x618C0000 | lo;  // ori  r12, r12, lo
+        p[2] = 0x7D8903A6;       // mtctr r12
+        p[3] = 0x4E800420;       // bctr
+        FlushCache(addr, 16);
+    }
+
     template <typename Callback, typename Original>
     inline void InstallHook(uintptr_t target, Callback callback, Original* originalOut) {
-        uint32_t* tramp = reinterpret_cast<uint32_t*>(AllocateTrampoline(8));
+        // Trampoline layout: 4 replayed original instructions, followed by a
+        // 4-instruction long jump back to target+16 (past what we overwrote).
+        // 4 instructions (not 1) are relocated so the overwritten region at
+        // the hook site is big enough to hold our own 4-instruction long
+        // jump - a real function's first 4 prologue instructions are never a
+        // valid mid-function branch target, so relocating all 4 is safe.
+        uint32_t* tramp = reinterpret_cast<uint32_t*>(AllocateTrampoline(8 * 4));
         if (!tramp) return;
 
-        uint32_t origInsn = *(volatile uint32_t*)target;
-        tramp[0] = origInsn;
+        for (int i = 0; i < 4; i++) {
+            tramp[i] = *(volatile uint32_t*)(target + i * 4);
+        }
+        FlushCache(reinterpret_cast<uintptr_t>(tramp), 16);
 
-        uint32_t returnAddr = target + 4;
-        uint32_t trampAddr = reinterpret_cast<uintptr_t>(&tramp[1]);
-        uint32_t delta = returnAddr - trampAddr;
-        tramp[1] = 0x48000000 | (delta & 0x03FFFFFC);
-        FlushCache(reinterpret_cast<uintptr_t>(tramp), 8);
+        WriteLongJump(reinterpret_cast<uintptr_t>(&tramp[4]), target + 16);
 
         *originalOut = reinterpret_cast<Original>(tramp);
 
@@ -75,7 +100,7 @@ namespace Backend {
         if (cbAddr < 0x01000000) {
             cbAddr += g_CodeCaveBase;
         }
-        Branch(target, cbAddr, false);
+        WriteLongJump(target, cbAddr);
     }
 
 } // namespace Backend
