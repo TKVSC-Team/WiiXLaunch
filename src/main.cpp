@@ -1,6 +1,12 @@
 #include <wiixlaunch.hpp>
 #include <cmath>
 
+#if WIIXL_WIIU
+// On-console diagnostics: Aroma toasts are the only user-visible output
+// channel on real hardware (no console/log without extra setup).
+#include <notifications/notifications.h>
+#endif
+
 static bool g_FreecamActive = false;
 static bool g_CamInitialized = false;
 
@@ -157,6 +163,10 @@ static void ProcessWiiUInput(uint32_t hold, float lx, float ly, float rx, float 
     if (combo && !s_LastCombo) {
         g_FreecamActive = !g_FreecamActive;
         g_CamInitialized = false;
+#if WIIXL_WIIU
+        WiiXLaunch::Backend::g_FreecamToggleCount++;
+        NotificationModule_AddInfoNotification(g_FreecamActive ? "WiiXLaunch: Freecam ON" : "WiiXLaunch: Freecam OFF");
+#endif
     }
     s_LastCombo = combo;
 }
@@ -164,6 +174,14 @@ static void ProcessWiiUInput(uint32_t hold, float lx, float ly, float rx, float 
 WIIXL_HOOK_DEFINE_TRAMPOLINE(VPADReadWrapperHook) {
     static void Callback(void* obj) {
         Orig(obj);
+#if WIIXL_WIIU
+        WiiXLaunch::Backend::g_InputHookFireCount++;
+        static bool s_Announced = false;
+        if (!s_Announced) {
+            s_Announced = true;
+            NotificationModule_AddInfoNotification("WiiXLaunch: input hook alive");
+        }
+#endif
 #if WIIXL_CEMU
         g_LogFrame++;
 
@@ -302,6 +320,14 @@ WIIXL_HOOK_DEFINE_TRAMPOLINE(LookAtCameraHook) {
 WIIXL_HOOK_DEFINE_TRAMPOLINE(LookAtCameraHook) {
 
     static void Callback(void* cameraController, float* outMatrix) {
+#if WIIXL_WIIU
+        WiiXLaunch::Backend::g_CamHookFireCount++;
+        static bool s_Announced = false;
+        if (!s_Announced) {
+            s_Announced = true;
+            NotificationModule_AddInfoNotification("WiiXLaunch: camera hook alive");
+        }
+#endif
         WIIXL_LOG(LOG_TAG_CAM_ENTRY, g_LogFrame, 0, 0, 0, 0,
                   static_cast<uint32_t>(reinterpret_cast<uintptr_t>(cameraController)));
 

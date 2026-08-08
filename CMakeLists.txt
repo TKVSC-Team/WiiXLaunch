@@ -52,19 +52,12 @@ if(PLATFORM STREQUAL "SWITCH")
     target_link_libraries(wiixlaunch_switch PRIVATE)
 
 elseif(PLATFORM STREQUAL "WIIU")
-    message(STATUS "Building WiiXLaunch for Nintendo Wii U (PowerPC)")
-    add_compile_definitions(__WIIU__=1 WIIXL_WIIU=1)
-
-    include_directories(
-        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/wut/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/wups/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/libfunctionpatcher/include
-    )
-
-    file(GLOB_RECURSE SOURCES "src/*.cpp")
-
-    add_library(wiixlaunch_wiiu SHARED ${SOURCES})
-    target_link_libraries(wiixlaunch_wiiu PRIVATE)
+    # A .wps is an elf2rpl-processed RPL linked against wut/WUPS with their
+    # specs and linker script - CMake has no rules for any of that, so this
+    # target lives in the WUPS Makefile flow instead (scripts/wiiu/Makefile,
+    # driven by build_wiiu.bat). Erroring here beats silently producing a
+    # shared library that isn't a loadable plugin.
+    message(FATAL_ERROR "The Wii U target is not built with CMake - run build_wiiu.bat (WUPS Makefile flow, see scripts/wiiu/Makefile).")
 
 elseif(PLATFORM STREQUAL "CEMU")
     message(STATUS "Building WiiXLaunch for Cemu Code Cave (PowerPC)")

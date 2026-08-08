@@ -10,3 +10,6 @@
 [submodule "vendor/libfunctionpatcher"]
 	path = vendor/libfunctionpatcher
 	url = https://github.com/wiiu-env/libfunctionpatcher.git
+[submodule "vendor/libnotifications"]
+	path = vendor/libnotifications
+	url = https://github.com/wiiu-env/libnotifications.git

@@ -1,43 +1,42 @@
 @echo off
+setlocal
+
 echo Generating config...
 python scripts\generate_config.py
 if errorlevel 1 exit /b 1
 
-echo Preparing Switch build environment...
-if not exist build\switch mkdir build\switch
-if exist build\switch\exlaunch rmdir /s /q build\switch\exlaunch
-mkdir build\switch\exlaunch
+:: devkitPro's make rules cannot handle spaces in paths, so stage the build in
+:: %TEMP% (space-free) instead of building in-place.
+set STAGE=%TEMP%\wiixlaunch-switch
+echo Preparing Switch build environment in %STAGE%...
+if exist "%STAGE%" rmdir /s /q "%STAGE%"
+mkdir "%STAGE%"
 
-:: Copy exlaunch template to build/switch/exlaunch
-xcopy /s /e /y /i vendor\exlaunch build\switch\exlaunch > nul
-
-:: Copy generated configs
-copy /y build\generated\switch\config.json build\switch\exlaunch\config.json > nul
-copy /y build\generated\switch\config.mk build\switch\exlaunch\config.mk > nul
+:: Copy exlaunch template and generated configs into the stage
+xcopy /s /e /y /i vendor\exlaunch "%STAGE%" > nul
+copy /y build\generated\switch\config.json "%STAGE%\config.json" > nul
+copy /y build\generated\switch\config.mk "%STAGE%\config.mk" > nul
 
 :: Copy our source files into the exlaunch source tree
-if not exist build\switch\exlaunch\source\wiixlaunch mkdir build\switch\exlaunch\source\wiixlaunch
-xcopy /s /e /y /i src\* build\switch\exlaunch\source\wiixlaunch > nul
+if not exist "%STAGE%\source\wiixlaunch" mkdir "%STAGE%\source\wiixlaunch"
+xcopy /s /e /y /i src\* "%STAGE%\source\wiixlaunch" > nul
 
 :: Delete exlaunch template main.cpp to avoid multiple definition conflict with our src/main.cpp
-del /f /q build\switch\exlaunch\source\program\main.cpp
+del /f /q "%STAGE%\source\program\main.cpp"
 
 :: Fix GCC anonymous struct typedef error in exlaunch
-powershell -Command "(Get-Content build\switch\exlaunch\source\lib\hook\nx64\hook_impl.cpp) -replace 'typedef struct \{', 'struct context {' -replace '\} context;', '};' | Set-Content build\switch\exlaunch\source\lib\hook\nx64\hook_impl.cpp"
+powershell -Command "(Get-Content '%STAGE%\source\lib\hook\nx64\hook_impl.cpp') -replace 'typedef struct \{', 'struct context {' -replace '\} context;', '};' | Set-Content '%STAGE%\source\lib\hook\nx64\hook_impl.cpp'"
 
-:: Run make
+:: Build via devkitPro's msys2 so DEVKITA64 and the switch rules resolve
 echo Building for Switch (ARM64)...
-cd build\switch\exlaunch
-make
-if errorlevel 1 (
-    cd ..\..\..
-    exit /b 1
-)
+set STAGEFWD=%STAGE:\=/%
+C:\devkitPro\msys2\usr\bin\bash.exe -lc "cd '%STAGEFWD%' && make"
+if errorlevel 1 exit /b 1
 
 :: Extract artifacts
-cd ..\..\..
-copy /y build\switch\exlaunch\deploy\subsdk9 build\switch\subsdk9 > nul
-copy /y build\switch\exlaunch\deploy\main.npdm build\switch\main.npdm > nul
+if not exist build\switch mkdir build\switch
+copy /y "%STAGE%\deploy\subsdk9" build\switch\subsdk9 > nul
+copy /y "%STAGE%\deploy\main.npdm" build\switch\main.npdm > nul
 
 python scripts\deploy.py
 echo Switch build complete!

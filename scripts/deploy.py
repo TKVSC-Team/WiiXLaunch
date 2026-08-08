@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
 import shutil
 import sys
 import subprocess
@@ -42,31 +43,29 @@ def main():
     build_switch_subsdk = os.path.join(root_dir, "build", "switch", subsdk_name)
     build_switch_npdm = os.path.join(root_dir, "build", "switch", "main.npdm")
     
-    if os.path.exists(build_switch_subsdk):
-        shutil.copy2(build_switch_subsdk, os.path.join(switch_deploy_dir, subsdk_name))
-        print(f"[Switch] Copied {subsdk_name} -> {switch_deploy_dir}")
-    else:
-        with open(os.path.join(switch_deploy_dir, subsdk_name), "w") as f:
-            f.write("# WiiXLaunch Switch SubSDK Binary\n")
-        print(f"[Switch] Created target placeholder -> {os.path.join(switch_deploy_dir, subsdk_name)}")
+    # Placeholders are only ever written where no deployed file exists yet -
+    # a previously deployed real binary must never be clobbered by running
+    # deploy.py after building just one of the platforms.
+    def deploy_or_placeholder(build_path, deploy_path, placeholder_text, label):
+        if os.path.exists(build_path):
+            shutil.copy2(build_path, deploy_path)
+            print(f"[{label}] Copied {os.path.basename(deploy_path)} -> {os.path.dirname(deploy_path)}")
+        elif not os.path.exists(deploy_path):
+            with open(deploy_path, "w") as f:
+                f.write(placeholder_text)
+            print(f"[{label}] Created target placeholder -> {deploy_path}")
+        else:
+            print(f"[{label}] No fresh build for {os.path.basename(deploy_path)}; keeping existing deployed file")
 
-    if os.path.exists(build_switch_npdm):
-        shutil.copy2(build_switch_npdm, os.path.join(switch_deploy_dir, "main.npdm"))
-        print(f"[Switch] Copied main.npdm -> {switch_deploy_dir}")
-    else:
-        with open(os.path.join(switch_deploy_dir, "main.npdm"), "w") as f:
-            f.write("# WiiXLaunch Switch NPDM\n")
-        print(f"[Switch] Created target placeholder -> {os.path.join(switch_deploy_dir, 'main.npdm')}")
+    deploy_or_placeholder(build_switch_subsdk, os.path.join(switch_deploy_dir, subsdk_name),
+                          "# WiiXLaunch Switch SubSDK Binary\n", "Switch")
+    deploy_or_placeholder(build_switch_npdm, os.path.join(switch_deploy_dir, "main.npdm"),
+                          "# WiiXLaunch Switch NPDM\n", "Switch")
 
     build_wiiu_wps = os.path.join(root_dir, "build", "wiiu", plugin_name)
-    
-    if os.path.exists(build_wiiu_wps):
-        shutil.copy2(build_wiiu_wps, os.path.join(wiiu_deploy_dir, plugin_name))
-        print(f"[Wii U] Copied {plugin_name} -> {wiiu_deploy_dir}")
-    else:
-        with open(os.path.join(wiiu_deploy_dir, plugin_name), "w") as f:
-            f.write("# WiiXLaunch Wii U Aroma WPS Plugin\n")
-        print(f"[Wii U] Created target placeholder -> {os.path.join(wiiu_deploy_dir, plugin_name)}")
+
+    deploy_or_placeholder(build_wiiu_wps, os.path.join(wiiu_deploy_dir, plugin_name),
+                          "# WiiXLaunch Wii U Aroma WPS Plugin\n", "Wii U")
 
     cemu_cfg = config.get("cemu", {})
     gp_path = cemu_cfg.get("graphic_pack_path", f"{project_name}/Mods/WiiXLaunch")
@@ -136,8 +135,22 @@ version = 7
         # S+Addend, and the target half is recomputed from scratch at deploy
         # time against (S+Addend+delta).
         lo_entries, ha_entries, hi_entries = [], [], []
+        # Only relocations for sections that actually end up in the flat
+        # binary may be turned into runtime fixups. Debug sections (.rela.
+        # debug_info etc., present whenever the payload is compiled with -g)
+        # also carry R_PPC_ADDR32 relocs, but their offsets are relative to
+        # the debug sections - applying them would corrupt arbitrary words of
+        # the payload at those offsets. (This happened: the resulting garbage
+        # jump crashed Cemu's recompiler at boot.)
+        current_section = ""
         for line in readelf_out.splitlines():
             parts = line.strip().split()
+            if line.startswith("Relocation section"):
+                m = re.search(r"'([^']+)'", line)
+                current_section = m.group(1) if m else ""
+                continue
+            if ".debug" in current_section:
+                continue
             if "R_PPC_ADDR32" in line or "R_PPC_RELATIVE" in line:
                 if len(parts) >= 1:
                     reloc_offsets.append(int(parts[0], 16))
@@ -296,9 +309,15 @@ version = 7
                         cemu_asm_content += f.read() + "\n\n"
 
     cemu_asm_path = os.path.join(cemu_deploy_dir, f"patch_{project_name}.asm")
-    with open(cemu_asm_path, "w", encoding="utf-8") as f:
-        f.write(cemu_asm_content)
-    print(f"[Cemu] Generated Graphic Pack files -> {cemu_deploy_dir}")
+    if not os.path.exists(elf_path) and os.path.exists(cemu_asm_path):
+        # Same rule as deploy_or_placeholder: without a fresh build, never
+        # replace a previously deployed patch (which contains the compiled
+        # payload) with a payload-less shell.
+        print(f"[Cemu] No fresh build ({elf_path} missing); keeping existing patch file")
+    else:
+        with open(cemu_asm_path, "w", encoding="utf-8") as f:
+            f.write(cemu_asm_content)
+        print(f"[Cemu] Generated Graphic Pack files -> {cemu_deploy_dir}")
 
     print("\nDeployment structures ready in:")
     print(f" - Switch (Console / Ryujinx / Yuzu): {switch_deploy_dir}")
