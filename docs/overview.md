@@ -1,0 +1,24 @@
+# WiiXLaunch
+
+WiiXLaunch is a cross-platform C++ hooking framework for **Nintendo Switch**, **Nintendo Wii U** (Aroma/WUPS), and **Cemu**. You write a hook once, in normal C++, and it builds for all three targets.
+
+The framework hides the differences between three very different hooking mechanisms behind one API:
+
+* **Switch**: exlaunch's inline ARM64 hooking engine, patched into the game's NSO at load time.
+* **Wii U**: WUPS + libfunctionpatcher, which replaces a function in the running RPX by title ID.
+* **Cemu**: a hand-written PowerPC code cave, injected via a graphic pack patch.
+
+## Where to go next
+
+* [Setting Up](setup.md) - installing the toolchains, configuring `wiixlaunch.json`, building and deploying for each platform.
+* [Hooks](hooks.md) - writing `WIIXL_HOOK_DEFINE_TRAMPOLINE` hooks, finding offsets, raw memory patches.
+* [Debugging](debugging.md) - `WIIXL_LOG`, and how it reaches you differently on each platform.
+
+## Layout
+
+* `src/` - your mod code. Starts at `WiiXLaunch_Init()` in `main.cpp`.
+* `include/wiixlaunch/` - the framework itself.
+* `vendor/` - exlaunch, wut, WUPS, libfunctionpatcher (git submodules).
+* `scripts/` - config generation and packaging.
+* `tools/` - host-side developer tools (see [Debugging](debugging.md)).
+* `wiixlaunch.json` - the one file that describes your mod: name, target title IDs, memory sizes.

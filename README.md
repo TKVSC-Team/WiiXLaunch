@@ -4,6 +4,8 @@
 
 Write game mods once in C++, and build for Switch, Wii U, and Cemu.
 
+See [overview.md](/docs/overview.md) for detailed documentation.
+
 ---
 
 ## Features
