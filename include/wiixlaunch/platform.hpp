@@ -52,4 +52,4 @@ inline uint32_t ToHost32(uint32_t val) {
 #endif
 }
 
-} // namespace WiiXLaunch
+}

@@ -55,16 +55,6 @@ namespace Backend {
         FlushCache(addr, 4);
     }
 
-    // A plain `b`/`ba` only has a 24-bit word-granular field: +-32MB reach for
-    // a relative branch, or the low/high 32MB absolute windows for `ba`. The
-    // codecave's address is chosen by Cemu/the graphic pack at runtime and can
-    // land arbitrarily far from a given hook target - Branch()'s naive
-    // `delta & 0x03FFFFFC` masking silently truncates an out-of-range delta
-    // into a garbage target instead of failing loudly, which crashed Cemu's
-    // recompiler the first time a hook target happened to be far enough away
-    // (~40MB) to hit this. WriteLongJump has unlimited reach in both
-    // directions since it loads the full 32-bit destination into r12 and
-    // branches through CTR rather than encoding a relative/absolute offset.
     inline void WriteLongJump(uintptr_t addr, uintptr_t dest) {
         uint32_t hi = static_cast<uint32_t>(dest) >> 16;
         uint32_t lo = static_cast<uint32_t>(dest) & 0xFFFF;
@@ -78,12 +68,6 @@ namespace Backend {
 
     template <typename Callback, typename Original>
     inline void InstallHook(uintptr_t target, Callback callback, Original* originalOut) {
-        // Trampoline layout: 4 replayed original instructions, followed by a
-        // 4-instruction long jump back to target+16 (past what we overwrote).
-        // 4 instructions (not 1) are relocated so the overwritten region at
-        // the hook site is big enough to hold our own 4-instruction long
-        // jump - a real function's first 4 prologue instructions are never a
-        // valid mid-function branch target, so relocating all 4 is safe.
         uint32_t* tramp = reinterpret_cast<uint32_t*>(AllocateTrampoline(8 * 4));
         if (!tramp) return;
 
@@ -103,6 +87,6 @@ namespace Backend {
         WriteLongJump(target, cbAddr);
     }
 
-} // namespace Backend
+}
 
-} // namespace WiiXLaunch
+}

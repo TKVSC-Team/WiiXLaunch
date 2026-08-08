@@ -36,4 +36,4 @@ struct CpuContext {
 #endif
 };
 
-} // namespace WiiXLaunch
+}
