@@ -100,16 +100,65 @@ version = 7
 
         if len(payload_data) % 4 != 0:
             payload_data += b'\x00' * (4 - (len(payload_data) % 4))
-            
+
+        # WiiXLaunch_Cemu_Init hand-relocates its own g_CodeCaveBase computation
+        # in place (see the @h/@l immediates in src/main.cpp and the matching
+        # comment in scripts/cemu.ld) - those absolute refs must NOT also be
+        # "fixed" below, or the delta would get applied twice and zero out
+        # g_CodeCaveBase. cemu.ld brackets that exact instruction range with
+        # these two symbols so we can exclude it purely by address, without
+        # guessing at offsets.
+        syms_out = subprocess.check_output([readelf_cmd, "-s", "-W", elf_path], text=True)
+        bootstrap_start, bootstrap_end = None, None
+        for line in syms_out.splitlines():
+            parts = line.split()
+            if len(parts) < 8:
+                continue
+            name = parts[7]
+            if name == "__wiixl_bootstrap_start":
+                bootstrap_start = int(parts[1], 16)
+            elif name == "__wiixl_bootstrap_end":
+                bootstrap_end = int(parts[1], 16)
+        if bootstrap_start is None or bootstrap_end is None:
+            raise RuntimeError("__wiixl_bootstrap_start/end symbols not found - check scripts/cemu.ld")
+
+        # Full 32-bit absolute words: reading the already-linked (base-0) value
+        # and adding the runtime delta directly is exact, no extra info needed.
         readelf_out = subprocess.check_output([readelf_cmd, "-r", elf_path], text=True)
         reloc_offsets = []
+        # Split 16-bit absolute-address halves (from `lis`/`addis`+`ori`/`addi`
+        # pairs materializing an absolute address in code, e.g. libm's rodata
+        # constant loads - see the sqrtf crash this was added to fix). Unlike
+        # ADDR32, these can't be fixed by adding delta to the bits already
+        # baked into the instruction (that's only half the real address, and
+        # HA additionally bakes in a sign-extension rounding adjustment) - so
+        # each entry instead carries the relocation's own fully-resolved
+        # S+Addend, and the target half is recomputed from scratch at deploy
+        # time against (S+Addend+delta).
+        lo_entries, ha_entries, hi_entries = [], [], []
         for line in readelf_out.splitlines():
+            parts = line.strip().split()
             if "R_PPC_ADDR32" in line or "R_PPC_RELATIVE" in line:
-                parts = line.strip().split()
                 if len(parts) >= 1:
+                    reloc_offsets.append(int(parts[0], 16))
+                continue
+            for rtype, bucket in (("R_PPC_ADDR16_LO", lo_entries),
+                                   ("R_PPC_ADDR16_HA", ha_entries),
+                                   ("R_PPC_ADDR16_HI", hi_entries)):
+                if rtype in line and len(parts) >= 5:
                     offset = int(parts[0], 16)
-                    reloc_offsets.append(offset)
-                    
+                    if bootstrap_start <= offset < bootstrap_end:
+                        break
+                    sym_value = int(parts[3], 16)
+                    # "Sym.Name + Addend" (or "- Addend") is everything from
+                    # parts[4] onward; addend is always the last token.
+                    addend_tok = parts[-1]
+                    sign = -1 if (len(parts) >= 6 and parts[-2] == "-") else 1
+                    addend = sign * int(addend_tok, 16)
+                    s_plus_a = (sym_value + addend) & 0xFFFFFFFF
+                    bucket.append((offset, s_plus_a))
+                    break
+
         num_relocs = len(reloc_offsets)
         binary_size = len(payload_data)
         entry_hook = int(cemu_cfg.get("entry_hook", "0x00000000"), 16)
@@ -172,7 +221,55 @@ version = 7
             cemu_asm_content += "  stwx r11, r8, r10\n"
             cemu_asm_content += "  addi r9, r9, 4\n"
             cemu_asm_content += "  bdnz wiixlaunch_reloc_loop\n"
-            
+
+        # Split 16-bit absolute halves (ADDR16_LO/HA/HI): each entry is
+        # {offset, S+Addend} (8 bytes) rather than just an offset, since the
+        # target half can't be recovered by adding delta to what's already
+        # baked into the instruction - see the comment above where these are
+        # collected. Each table reuses the same bl-then-mflr trick as the
+        # ADDR32 table above to find its own runtime address, so this is
+        # exactly the proven mechanism repeated, not new addressing logic.
+        for name, entries, needs_rounding in (
+            ("lo", lo_entries, False),
+            ("ha", ha_entries, True),
+            ("hi", hi_entries, False),
+        ):
+            if not entries:
+                continue
+
+            cemu_asm_content += f"  bl wiixlaunch_after_{name}_table\n"
+            cemu_asm_content += f"wiixlaunch_{name}_table:\n"
+            for offset, value in entries:
+                cemu_asm_content += f"  .int 0x{offset:08X}\n"
+                cemu_asm_content += f"  .int 0x{value:08X}\n"
+            cemu_asm_content += f"wiixlaunch_after_{name}_table:\n"
+            cemu_asm_content += "  mflr r9\n"
+
+            count = len(entries)
+            cemu_asm_content += f"  lis r12, 0x{count >> 16:04X}\n"
+            cemu_asm_content += f"  ori r12, r12, 0x{count & 0xFFFF:04X}\n"
+            cemu_asm_content += "  mtctr r12\n"
+
+            cemu_asm_content += f"wiixlaunch_{name}_loop:\n"
+            cemu_asm_content += "  lwz r10, 0(r9)\n"   # offset
+            cemu_asm_content += "  lwz r11, 4(r9)\n"   # S+Addend
+            cemu_asm_content += "  add r11, r11, r8\n" # target = S+Addend+delta
+            if needs_rounding:
+                # HA = (target + 0x8000) >> 16 (rounds so the sign-extending
+                # ADDI/LFS/etc. paired with it reconstructs the low half correctly)
+                cemu_asm_content += "  lis r12, 0x0000\n"
+                cemu_asm_content += "  ori r12, r12, 0x8000\n"
+                cemu_asm_content += "  add r11, r11, r12\n"
+                cemu_asm_content += "  rlwinm r11, r11, 16, 16, 31\n"
+            else:
+                # LO = target & 0xFFFF (sthx below truncates for us);
+                # HI = target >> 16 (no rounding, paired with ORI not ADDI)
+                if name == "hi":
+                    cemu_asm_content += "  rlwinm r11, r11, 16, 16, 31\n"
+            cemu_asm_content += "  sthx r11, r8, r10\n"
+            cemu_asm_content += "  addi r9, r9, 8\n"
+            cemu_asm_content += f"  bdnz wiixlaunch_{name}_loop\n"
+
         cemu_asm_content += "wiixlaunch_reloc_done:\n"
         cemu_asm_content += "  lwz r0, 0x34(r1)\n"
         cemu_asm_content += "  mtlr r0\n"

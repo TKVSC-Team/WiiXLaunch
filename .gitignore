@@ -1,4 +1,4 @@
-build/
+build
 build_cemu/
 build_switch/
 build_wiiu/
@@ -9,3 +9,9 @@ deploy/
 *.o
 *.obj
 .DS_Store
+tools/ring_log_reader/*.exe
+tools/ring_log_reader/build_log.txt
+tools/cam_finder/
+tools/symbol_port/*.json
+tools/symbol_port
+scratch

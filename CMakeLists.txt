@@ -20,7 +20,7 @@ if(PLATFORM STREQUAL "CEMU" OR PLATFORM STREQUAL "WIIU")
     set(CMAKE_CXX_COMPILER powerpc-eabi-g++)
 endif()
 
-project(WiiXLaunch C CXX)
+project(WiiXLaunch C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
