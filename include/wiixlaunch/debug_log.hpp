@@ -15,7 +15,7 @@
 // One log call, WIIXL_LOG(fmt, ...), routed to whatever's actually available
 // on each target. None of these platforms have a normal console:
 //   Switch: exlaunch's SvcLogger, via svcOutputDebugString (a debugger or
-//           sysmodule can pick it up).
+//           emulator can pick it up).
 //   Wii U (Aroma): an on-screen notification toast - there's no log/console
 //           access without extra setup.
 //   Cemu: the CEMU codecave has no OS log access at all, so entries go into
