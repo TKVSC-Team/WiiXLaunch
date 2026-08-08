@@ -182,3 +182,7 @@ Overwrites the instruction at `targetOffset` with a platform-correct no-op (`0xD
 ```cpp
 WiiXLaunch::CodePatch::Nop(offset);
 ```
+
+### CpuContext
+
+[`context.hpp`](../include/wiixlaunch/context.hpp) defines a `WiiXLaunch::CpuContext` struct for raw register access (`GetArg`/`SetArg` per platform). It's not wired into any hook path yet on Switch, Wii U, or Cemu (nothing constructs one or passes it to a callback.) I haven't found a reason to implement it yet, if I do, I will, or maybe you could make a PR lol.
