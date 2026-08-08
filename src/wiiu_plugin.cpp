@@ -1,13 +1,7 @@
 // WUPS plugin glue - Wii U (Aroma) only. This is what makes the built .wps a
 // loadable plugin: Aroma reads the WUPS_PLUGIN_* metadata sections and calls
 // INITIALIZE_PLUGIN() at plugin load, which is our one entry into
-// WiiXLaunch_Init(). Compiles to nothing on Switch/Cemu (their entrypoints are
-// exl_main and WiiXLaunch_Cemu_Init respectively).
-//
-// Also hosts the on-console diagnostics: hook/patch state is shown both as
-// Aroma toasts (best effort - the notification module may not be present) and
-// as stub items in this plugin's config menu (L + D-Down + Minus), which works
-// through the plugin loader itself and needs no extra modules.
+// WiiXLaunch_Init().
 #include <wiixlaunch/platform.hpp>
 
 #if WIIXL_WIIU
@@ -85,9 +79,6 @@ INITIALIZE_PLUGIN() {
     }
 }
 
-// Fires on every title launch, in the launched title's process - the most
-// reliable place for a visible toast (and re-inits the notification lib in
-// case INITIALIZE_PLUGIN ran in a context where the module wasn't reachable).
 ON_APPLICATION_START() {
     s_NotifyInitStatus = NotificationModule_InitLibrary();
 
@@ -98,4 +89,4 @@ ON_APPLICATION_START() {
     NotificationModule_AddInfoNotification(msg);
 }
 
-#endif // WIIXL_WIIU
+#endif
