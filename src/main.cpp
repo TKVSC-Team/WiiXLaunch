@@ -25,10 +25,11 @@ static uint32_t g_LogFrame = 0;
 
 // Unified Button Masks
 #if WIIXL_SWITCH
-    constexpr uint32_t BTN_B     = 0x0001;
-    constexpr uint32_t BTN_X     = 0x0008;
-    constexpr uint32_t BTN_ZL    = 0x0080;
-    constexpr uint32_t BTN_DDOWN = 0x0002;
+    // nn::hid::NpadButton bit positions: A=0, B=1, X=2, Y=3, L=6, R=7, ZL=8, ZR=9, Down=15
+    constexpr uint32_t BTN_B     = 0x0002;
+    constexpr uint32_t BTN_X     = 0x0004;
+    constexpr uint32_t BTN_ZL    = 0x0100;
+    constexpr uint32_t BTN_DDOWN = 0x8000;
 #else
     // Wii U VPAD buttons (also used as the canonical/target bitspace for freecam logic)
     constexpr uint32_t BTN_B     = 0x4000;
@@ -96,12 +97,20 @@ struct NpadState {
 
 static void ProcessNpadState(NpadState* state) {
     if (!state) return;
+    // NpadAttribute::IsConnected - skip styles that aren't active (e.g. the
+    // Handheld state while docked), otherwise their all-zero data would
+    // clobber the real controller's input.
+    if (!(state->Flags & 0x1)) return;
     g_ButtonsHold = static_cast<uint32_t>(state->Buttons);
 
     float lx = static_cast<float>(state->LStickX) / 32767.0f;
     float ly = static_cast<float>(state->LStickY) / 32767.0f;
     float rx = static_cast<float>(state->RStickX) / 32767.0f;
     float ry = static_cast<float>(state->RStickY) / 32767.0f;
+
+    // Match the Wii U path's right-stick X inversion so the shared freecam
+    // math turns the same direction on both platforms.
+    rx = -rx;
 
     g_LeftStickX  = (std::abs(lx) > 0.1f) ? lx : 0.0f;
     g_LeftStickY  = (std::abs(ly) > 0.1f) ? ly : 0.0f;
@@ -117,25 +126,27 @@ static void ProcessNpadState(NpadState* state) {
     s_LastCombo = combo;
 }
 
+// nn::hid::GetNpadStates returns void (confirmed against the 1.6.0 PLT stubs
+// in Ghidra), so there is no result to gate on - process whenever the id
+// matches and at least one state was requested. state[0] is the most recent
+// sample. The old `int res = Orig(...); if (res > 0 ...)` gated on a garbage
+// register and made input processing random.
 WIIXL_HOOK_DEFINE_TRAMPOLINE(GetNpadStatesHandheldHook) {
-    static int Callback(void* stateArray, int count, const uint32_t& npadId) {
-        int res = Orig(stateArray, count, npadId);
-        if (res > 0 && npadId == 0x20) ProcessNpadState(static_cast<NpadState*>(stateArray));
-        return res;
+    static void Callback(void* stateArray, int count, const uint32_t& npadId) {
+        Orig(stateArray, count, npadId);
+        if (count > 0 && npadId == 0x20) ProcessNpadState(static_cast<NpadState*>(stateArray));
     }
 };
 WIIXL_HOOK_DEFINE_TRAMPOLINE(GetNpadStatesJoyDualHook) {
-    static int Callback(void* stateArray, int count, const uint32_t& npadId) {
-        int res = Orig(stateArray, count, npadId);
-        if (res > 0 && npadId == 0x0) ProcessNpadState(static_cast<NpadState*>(stateArray));
-        return res;
+    static void Callback(void* stateArray, int count, const uint32_t& npadId) {
+        Orig(stateArray, count, npadId);
+        if (count > 0 && npadId == 0x0) ProcessNpadState(static_cast<NpadState*>(stateArray));
     }
 };
 WIIXL_HOOK_DEFINE_TRAMPOLINE(GetNpadStatesFullKeyHook) {
-    static int Callback(void* stateArray, int count, const uint32_t& npadId) {
-        int res = Orig(stateArray, count, npadId);
-        if (res > 0 && npadId == 0x0) ProcessNpadState(static_cast<NpadState*>(stateArray));
-        return res;
+    static void Callback(void* stateArray, int count, const uint32_t& npadId) {
+        Orig(stateArray, count, npadId);
+        if (count > 0 && npadId == 0x0) ProcessNpadState(static_cast<NpadState*>(stateArray));
     }
 };
 #endif
