@@ -30,20 +30,14 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpened(WUPSConfigCategoryHandle roo
 
     // Static buffers: the config item may keep the pointer until the menu
     // closes, so these must outlive this callback.
-    static char lines[6][96];
+    static char lines[3][96];
     snprintf(lines[0], sizeof(lines[0]), "FunctionPatcher init: %s",
              B::g_BackendInitOk ? "OK" : "FAILED");
     snprintf(lines[1], sizeof(lines[1]), "Hook patches: %lu ok / %lu failed%s%s",
              (unsigned long)B::g_PatchOkCount, (unsigned long)B::g_PatchFailCount,
              B::g_PatchFailCount ? " - " : "",
              B::g_PatchFailCount ? FunctionPatcher_GetStatusStr(B::g_LastPatchStatus) : "");
-    snprintf(lines[2], sizeof(lines[2]), "Input hook fires: %lu",
-             (unsigned long)B::g_InputHookFireCount);
-    snprintf(lines[3], sizeof(lines[3]), "Camera hook fires: %lu",
-             (unsigned long)B::g_CamHookFireCount);
-    snprintf(lines[4], sizeof(lines[4]), "Freecam toggles: %lu",
-             (unsigned long)B::g_FreecamToggleCount);
-    snprintf(lines[5], sizeof(lines[5]), "Notification lib status: %d",
+    snprintf(lines[2], sizeof(lines[2]), "Notification lib status: %d",
              (int)s_NotifyInitStatus);
 
     for (auto& line : lines) {
