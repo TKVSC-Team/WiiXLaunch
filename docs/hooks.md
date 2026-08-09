@@ -157,6 +157,25 @@ The plain macro all three hook forms use internally to pick the right offset for
 constexpr auto offset = WIIXL_OFFSET(0x00885bd0, 0x02d908b4);
 ```
 
+### WiiXLaunch::GetTargetFunction<FnPtr>(switchOffset, wiiuOffset)
+
+For calling a game function directly instead of hooking it (e.g. a getter you want the answer from, not behavior you want to change.) Same `(switchOffset, wiiuOffset)` shape as `Install()`, but resolves to a callable function pointer of the type you ask for:
+
+```cpp
+using GetUniqueNameFn = const char* (*)(void* actor);
+auto getUniqueName = WiiXLaunch::GetTargetFunction<GetUniqueNameFn>(0x11c9bfc, 0x0);
+const char* name = getUniqueName(actor);
+```
+
+The signature you give it must match the target function's real signature (return type, argument types, calling convention) the same way a hook `Callback` does. It's a raw function pointer cast, nothing checks this for you.
+
+This exists because the two platforms resolve a Ghidra offset into a real address differently, and getting that wrong is a silent crash, not a compile error:
+
+* **Switch**: NSOs are relocated to a random base every launch, so a Switch offset (a Ghidra address minus `0x7100000000`) needs that base added back at runtime. `GetTargetFunction` does this via `exl::util::modules::GetTargetStart()`, the same call every hook `Install()` already makes internally to find its target.
+* **Wii U / Cemu**: the RPX's `.text` loads at a fixed, known address (`kRpxTextBase` in [`wiiu_backend.hpp`](../include/wiixlaunch/wiiu/wiiu_backend.hpp)), so a Wii U offset from Ghidra's RPX loader plugin is already the final, absolute, callable address. Cemu reuses the Wii U offset for the same reason hook `Install()` does.
+
+`WiiXLaunch::ResolveTarget(offset)` (in [`call.hpp`](../include/wiixlaunch/call.hpp)) does the same platform-correct resolution without the function-pointer cast, if you need a raw address instead (to read/write memory at a computed location, say).
+
 ### CodePatch::Write(targetOffset, data, size)
 
 Copies raw bytes over the target address. On Wii U this also flushes the data cache and invalidates the instruction cache at that range (`DCFlushRange`/`ICInvalidateRange`), since PowerPC doesn't keep them coherent for you.
