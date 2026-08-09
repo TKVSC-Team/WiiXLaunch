@@ -5,4 +5,5 @@
 #include "wiixlaunch/context.hpp"
 #include "wiixlaunch/patch.hpp"
 #include "wiixlaunch/hook.hpp"
+#include "wiixlaunch/call.hpp"
 #include "wiixlaunch/debug_log.hpp"
