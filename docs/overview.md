@@ -1,3 +1,5 @@
+![logo](res/WiiXLaunch2K_Sat_Circle_LowRes.png)
+
 # WiiXLaunch
 
 WiiXLaunch is a cross-platform C++ hooking framework for **Nintendo Switch**, **Nintendo Wii U** (Aroma/WUPS), and **Cemu**. You write a hook once, in normal C++, and it builds for all three targets.
