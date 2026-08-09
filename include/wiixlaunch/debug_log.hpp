@@ -3,7 +3,6 @@
 #include "platform.hpp"
 #include <cstdint>
 #include <cstdarg>
-#include <cstdio>
 
 #if WIIXL_SWITCH
 #include <lib.hpp>
@@ -61,14 +60,127 @@ inline void WriteRingEntry(const char* text, int len) {
 
 #endif // WIIXL_CEMU
 
+// Hand-rolled in place of vsnprintf: the Cemu target is a freestanding
+// -nostartfiles binary (see build_cemu.bat/scripts/cemu.ld) - there's no
+// crt0, so .bss is never zeroed before WiiXLaunch_Init runs. newlib's
+// vsnprintf touches reentrancy/locale state that lives in .bss and assumes
+// it's zero-initialized; calling it here means it operates on whatever
+// garbage was already in that memory (the codecave is carved out of live
+// game memory, not freshly mapped), which corrupts something unrelated
+// instead of crashing at the call site itself. Kept libc-free on every
+// platform rather than just Cemu, both for consistency and so Switch/Wii U
+// don't quietly grow a dependency on this working correctly there too.
+// Supports exactly what WIIXL_LOG call sites in this codebase use: %s, %p,
+// %d, %u, %x/%X, %f (with optional .N precision), %%.
+namespace impl {
+
+inline void AppendChar(char* buf, uint32_t& len, uint32_t cap, char c) {
+    if (len < cap) buf[len++] = c;
+}
+
+inline void AppendStr(char* buf, uint32_t& len, uint32_t cap, const char* s) {
+    if (!s) s = "(null)";
+    while (*s) AppendChar(buf, len, cap, *s++);
+}
+
+inline void AppendUInt(char* buf, uint32_t& len, uint32_t cap, unsigned long long value, int base, bool upper) {
+    char digits[24];
+    int n = 0;
+    if (value == 0) digits[n++] = '0';
+    while (value != 0) {
+        int d = static_cast<int>(value % static_cast<unsigned>(base));
+        digits[n++] = d < 10 ? static_cast<char>('0' + d) : static_cast<char>((upper ? 'A' : 'a') + d - 10);
+        value /= static_cast<unsigned>(base);
+    }
+    while (n > 0) AppendChar(buf, len, cap, digits[--n]);
+}
+
+inline void AppendInt(char* buf, uint32_t& len, uint32_t cap, long long value) {
+    if (value < 0) {
+        AppendChar(buf, len, cap, '-');
+        AppendUInt(buf, len, cap, static_cast<unsigned long long>(-value), 10, false);
+    } else {
+        AppendUInt(buf, len, cap, static_cast<unsigned long long>(value), 10, false);
+    }
+}
+
+inline void AppendFloat(char* buf, uint32_t& len, uint32_t cap, double value, int precision) {
+    if (precision < 0) precision = 6;
+    if (precision > 9) precision = 9; // keeps pow10 well within unsigned long long range
+    if (value < 0) {
+        AppendChar(buf, len, cap, '-');
+        value = -value;
+    }
+    unsigned long long pow10 = 1;
+    for (int i = 0; i < precision; i++) pow10 *= 10;
+    unsigned long long scaled = static_cast<unsigned long long>(value * static_cast<double>(pow10) + 0.5);
+    unsigned long long intPart = scaled / pow10;
+    AppendUInt(buf, len, cap, intPart, 10, false);
+    if (precision > 0) {
+        AppendChar(buf, len, cap, '.');
+        unsigned long long fracPart = scaled - intPart * pow10;
+        unsigned long long divisor = pow10 / 10;
+        for (int i = 0; i < precision; i++) {
+            unsigned long long digit = (fracPart / divisor) % 10;
+            AppendChar(buf, len, cap, static_cast<char>('0' + digit));
+            divisor /= 10;
+        }
+    }
+}
+
+}
+
 inline void DebugPrint(const char* fmt, ...) {
     char text[kMaxLogTextLen];
+    uint32_t len = 0;
+    constexpr uint32_t cap = sizeof(text) - 1; // leaves room for the null terminator below
+
     va_list args;
     va_start(args, fmt);
-    int len = vsnprintf(text, sizeof(text), fmt, args);
+
+    for (const char* p = fmt; *p != '\0'; p++) {
+        if (*p != '%') {
+            impl::AppendChar(text, len, cap, *p);
+            continue;
+        }
+        p++;
+        if (*p == '\0') break;
+        if (*p == '%') {
+            impl::AppendChar(text, len, cap, '%');
+            continue;
+        }
+
+        int precision = -1;
+        if (*p == '.') {
+            p++;
+            precision = 0;
+            while (*p >= '0' && *p <= '9') {
+                precision = precision * 10 + (*p - '0');
+                p++;
+            }
+        }
+
+        switch (*p) {
+            case 'd': case 'i': impl::AppendInt(text, len, cap, va_arg(args, int)); break;
+            case 'u': impl::AppendUInt(text, len, cap, va_arg(args, unsigned int), 10, false); break;
+            case 'x': impl::AppendUInt(text, len, cap, va_arg(args, unsigned int), 16, false); break;
+            case 'X': impl::AppendUInt(text, len, cap, va_arg(args, unsigned int), 16, true); break;
+            case 'p':
+                impl::AppendStr(text, len, cap, "0x");
+                impl::AppendUInt(text, len, cap, reinterpret_cast<uintptr_t>(va_arg(args, void*)), 16, false);
+                break;
+            case 's': impl::AppendStr(text, len, cap, va_arg(args, const char*)); break;
+            case 'f': impl::AppendFloat(text, len, cap, va_arg(args, double), precision); break;
+            default:
+                impl::AppendChar(text, len, cap, '%');
+                impl::AppendChar(text, len, cap, *p);
+                break;
+        }
+    }
+
     va_end(args);
-    if (len <= 0) return;
-    if (len > static_cast<int>(sizeof(text)) - 1) len = sizeof(text) - 1;
+    text[len] = '\0'; // NotificationModule_AddInfoNotification needs a C string; harmless elsewhere
+    if (len == 0) return;
 
 #if WIIXL_SWITCH
     exl::log::Logging.Log(std::string_view{ text, static_cast<size_t>(len) });
