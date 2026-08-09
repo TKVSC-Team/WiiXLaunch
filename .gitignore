@@ -1,4 +1,5 @@
-build
+build/
+build/generated
 build_cemu/
 build_switch/
 build_wiiu/
