@@ -4,7 +4,7 @@
 
 **WiiXLaunch** is a cross-platform C++ hooking framework for **Nintendo Switch** (AArch64 via ExLaunch), **Nintendo Wii U** (PowerPC via WUPS / libfunctionpatcher), and **Cemu** (PC Graphic Pack bare-metal code caves).
 
-Write game mods once in C++, and build for Switch, Wii U, and Cemu.
+Write game mods once in C++, and build for Switch, Wii U, and Cemu (2.6+).
 
 See [overview.md](/docs/overview.md) for detailed documentation.
 
