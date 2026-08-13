@@ -24,7 +24,11 @@ TARGET		:=	BotW_SampleMod
 BUILD		:=	build
 SOURCES		:=	src
 DATA		:=
-INCLUDES	:=	include generated/include
+# $(wildcard modules/*/include): optional WiiXLaunch modules (e.g.
+# vendor/wiixlaunch-botw) - not part of base WiiXLaunch, staged here by
+# build_wiiu.bat under modules/<name>/include if this mod added one as a
+# submodule. Picked up automatically; nothing to edit here per-project.
+INCLUDES	:=	include generated/include $(wildcard modules/*/include)
 
 #-------------------------------------------------------------------------------
 # options for code generation

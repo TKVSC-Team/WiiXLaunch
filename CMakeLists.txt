@@ -38,6 +38,12 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# Optional WiiXLaunch modules (e.g. vendor/wiixlaunch-botw) - not part of
+# base WiiXLaunch, picked up automatically if this mod added one as a
+# submodule (git submodule add <url> vendor/wiixlaunch-<name>).
+file(GLOB WIIXL_MODULE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/wiixlaunch-*/include")
+include_directories(${WIIXL_MODULE_INCLUDE_DIRS})
+
 if(PLATFORM STREQUAL "SWITCH")
     message(STATUS "Building WiiXLaunch for Nintendo Switch (ARM64)")
     add_compile_definitions(__SWITCH__=1 WIIXL_SWITCH=1)

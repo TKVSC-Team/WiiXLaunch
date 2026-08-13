@@ -20,6 +20,16 @@ mkdir -p "$STAGE" "$STAGE/generated"
 cp -r src "$STAGE/src"
 cp -r include "$STAGE/include"
 cp -r build/generated/include "$STAGE/generated/include"
+
+# Optional WiiXLaunch modules (e.g. vendor/wiixlaunch-botw) - not part of
+# base WiiXLaunch, staged here if this mod added one as a submodule
+# (git submodule add <url> vendor/wiixlaunch-<name>). scripts/wiiu/Makefile
+# picks up modules/*/include automatically.
+for d in vendor/wiixlaunch-*/; do
+  name="$(basename "$d")"
+  [ -d "${d}include" ] && mkdir -p "$STAGE/modules/$name" && cp -r "${d}include" "$STAGE/modules/$name/include"
+done
+
 cp scripts/wiiu/Makefile "$STAGE/Makefile"
 
 echo "Building for Wii U (PowerPC)..."

@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
 call scripts\devkitpro_env.bat
 if errorlevel 1 exit /b 1
@@ -9,6 +9,14 @@ python scripts\generate_config.py
 if errorlevel 1 exit /b 1
 
 if not exist build mkdir build
+
+:: Optional WiiXLaunch modules (e.g. vendor/wiixlaunch-botw) - not part of
+:: base WiiXLaunch, picked up automatically if this mod added one as a
+:: submodule (git submodule add <url> vendor/wiixlaunch-<name>).
+set MODULE_FLAGS=
+for /d %%G in (vendor\wiixlaunch-*) do (
+    if exist "%%G\include" set MODULE_FLAGS=!MODULE_FLAGS! -I%%G\include
+)
 
 :: Invoke devkitPPC directly instead of CMake: on machines with Visual Studio
 :: installed, CMake defaults to the VS generator, which ignores the
@@ -22,7 +30,7 @@ echo Building Cemu payload (PowerPC)...
 "%DKP_PPC_GXX%" ^
   -std=gnu++20 -fPIE -msdata=none ^
   -D__CEMU__=1 -DWIIXL_CEMU=1 ^
-  -I include -I build\generated\include ^
+  -I include -I build\generated\include %MODULE_FLAGS% ^
   -nostartfiles -T scripts\cemu.ld -Wl,-q ^
   src\main.cpp src\wiiu_plugin.cpp ^
   -o build\wiixlaunch_cemu

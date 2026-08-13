@@ -117,13 +117,32 @@ namespace exl::setting {{
     print(f"[ConfigGen] Generated {exl_json_path}")
 
     root_dir_unix = root_dir.replace('\\', '/')
+
+    # Optional WiiXLaunch modules (e.g. vendor/wiixlaunch-botw), added as
+    # submodules by mods that want them - not part of base WiiXLaunch, so
+    # only picked up if actually present. Scoped to the "wiixlaunch-*" name
+    # so this doesn't also pull in the Wii U-only vendor/wut, vendor/wups,
+    # etc., which have their own top-level include/ dirs but are wired up
+    # through their own dedicated Makefile flow instead.
+    vendor_dir = os.path.join(root_dir, "vendor")
+    module_includes = []
+    if os.path.isdir(vendor_dir):
+        for name in sorted(os.listdir(vendor_dir)):
+            if not name.startswith("wiixlaunch-"):
+                continue
+            inc_dir = os.path.join(vendor_dir, name, "include")
+            if os.path.isdir(inc_dir):
+                module_includes.append(inc_dir.replace('\\', '/'))
+
+    module_flags = "".join(f' -I"{inc}"' for inc in module_includes)
+
     config_mk_content = f"""LOAD_KIND := {switch_cfg.get("load_kind", "Module")}
 PROGRAM_ID := {title_id}
 NPDM_JSON := config.json
 PYTHON := python3
 MOUNT_PATH := {switch_cfg.get("mount_path", "/mnt/sdcard")}
-C_FLAGS := -I"{root_dir_unix}/include" -I"{root_dir_unix}/build/generated/include"
-CXX_FLAGS := -I"{root_dir_unix}/include" -I"{root_dir_unix}/build/generated/include"
+C_FLAGS := -I"{root_dir_unix}/include" -I"{root_dir_unix}/build/generated/include"{module_flags}
+CXX_FLAGS := -I"{root_dir_unix}/include" -I"{root_dir_unix}/build/generated/include"{module_flags}
 """
     exl_mk_path = os.path.join(gen_switch_dir, "config.mk")
     with open(exl_mk_path, "w", encoding="utf-8") as f:

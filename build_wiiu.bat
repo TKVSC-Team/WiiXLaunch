@@ -17,6 +17,15 @@ mkdir "%STAGE%"
 xcopy /s /e /y /i src "%STAGE%\src" > nul
 xcopy /s /e /y /i include "%STAGE%\include" > nul
 xcopy /s /e /y /i build\generated\include "%STAGE%\generated\include" > nul
+
+:: Optional WiiXLaunch modules (e.g. vendor/wiixlaunch-botw) - not part of
+:: base WiiXLaunch, staged here if this mod added one as a submodule
+:: (git submodule add <url> vendor/wiixlaunch-<name>). scripts/wiiu/Makefile
+:: picks up modules/*/include automatically.
+for /d %%G in (vendor\wiixlaunch-*) do (
+    if exist "%%G\include" xcopy /s /e /y /i "%%G\include" "%STAGE%\modules\%%~nxG\include" > nul
+)
+
 copy /y scripts\wiiu\Makefile "%STAGE%\Makefile" > nul
 
 :: Build via devkitPro's msys2 so DEVKITPRO/elf2rpl/wups_rules all resolve.
