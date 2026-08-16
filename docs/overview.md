@@ -25,3 +25,7 @@ The framework hides the differences between three very different hooking mechani
 * `scripts/` - config generation and packaging.
 * `tools/` - host-side developer tools (see [Debugging](debugging.md)).
 * `wiixlaunch.json` - the one file that describes your mod: name, target title IDs, memory sizes.
+
+## Graphics injection R&D
+
+This project is a sandbox for the in-game UI/graphics-pipeline injection work described in [wiixlaunch-botw](https://github.com/TKVSC-Team/wiixlaunch-botw)'s TODO.md - see [Switch (NVN) findings](switch-nvn-findings.md) for the reverse-engineering notes so far.

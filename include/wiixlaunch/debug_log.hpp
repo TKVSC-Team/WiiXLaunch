@@ -183,7 +183,7 @@ inline void DebugPrint(const char* fmt, ...) {
     if (len == 0) return;
 
 #if WIIXL_SWITCH
-    exl::log::Logging.Log(std::string_view{ text, static_cast<size_t>(len) });
+    ::Logging.Log(std::string_view{ text, static_cast<size_t>(len) });
 #elif WIIXL_WIIU
     NotificationModule_AddInfoNotification(text);
 #elif WIIXL_CEMU

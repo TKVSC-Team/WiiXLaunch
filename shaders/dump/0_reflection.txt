@@ -1,0 +1,20 @@
+ShaderInput 0
+	Name: a_Color
+	Type: Float32x4
+	ShaderSlot: 1
+	ArrayCount: 1
+	Stages: VS
+
+ShaderInput 1
+	Name: a_Position
+	Type: Float32x4
+	ShaderSlot: 0
+	ArrayCount: 1
+	Stages: VS
+
+ShaderOutput 0
+	Name: o_Color
+	ShaderSlot: 0
+	ArrayCount: 1
+	Stages: PS
+

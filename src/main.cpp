@@ -1,4 +1,27 @@
 #include <wiixlaunch.hpp>
+#include <wiixlaunch/botw/botw.hpp>
+#include <nvn_overlay.hpp>
+
+// Sandbox for graphics-pipeline injection R&D (NVN on Switch, GX2 on Wii
+// U/Cemu) - see wiixlaunch-botw's TODO.md and docs/switch-nvn-findings.md.
+// First real attempt below: an always-on text overlay via a hook on
+// sead::GameFrameworkNx::present_. UNTESTED - see nvn_overlay.hpp for the
+// full implementation and its caveats.
+
+#if WIIXL_SWITCH
+WIIXL_HOOK_DEFINE_TRAMPOLINE(ProcDrawHook) {
+    static void Callback(void* gameFramework) {
+        NvnOverlay::g_MainGameFramework = gameFramework;
+        void* graphicsNvn = NvnOverlay::GetGraphicsNvnInstance();
+        if (graphicsNvn) {
+            NvnOverlay::EnsureCapturedDrawInitialized(gameFramework);
+            NvnOverlay::GetBnshProgram(graphicsNvn);
+            NvnOverlay::EnsureEndRecordingHookInstalled();
+        }
+        Orig(gameFramework);
+    }
+};
+#endif
 
 // Entry point called once at plugin/module load. Install your hooks here.
 extern "C" void WiiXLaunch_Init() {
@@ -15,7 +38,11 @@ extern "C" void WiiXLaunch_Init() {
     // Confirms the debug log pipeline works end-to-end on whichever platform this is.
     WIIXL_LOG("WiiXLaunch: init OK");
 
-    // Example: MyHook::Install(switchOffset, wiiuOffset);
+    WiiXLaunch::BotW::Controller::Init();
+
+#if WIIXL_SWITCH
+    ProcDrawHook::Install(0xaf90a8, 0);
+#endif
 }
 
 // Cemu code caves are position-independent, so the trampoline pool needs its
