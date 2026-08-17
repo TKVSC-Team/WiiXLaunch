@@ -18,11 +18,14 @@
 #include <cstddef>
 #include <rainbow_bnsh.hpp>
 #include <rainbow_sead_bin.hpp>
+#include <plasma_sead_bin.hpp>
 #include <wiixl_quad_bnsh_bytes.hpp>
 #include <texture_shader_bnsh_bytes.hpp>
 #include <nvn_font_shader_bytes.hpp>
 #include <nvn_font_texture_bytes.hpp>
 #include <lib/util/sys/mem_layout.hpp>
+
+extern "C" void armDCacheFlush(void* addr, size_t size);
 
 namespace NvnOverlay {
 
@@ -105,27 +108,34 @@ namespace Offset {
     constexpr uintptr_t kBufferInitialize              = 0x2596bb8;
     constexpr uintptr_t kBufferGetAddress              = 0x2596bd8;
     constexpr uintptr_t kBufferMap                     = 0x2596bd0;
-    constexpr uintptr_t kColorStateSetDefaults            = 0x2597088;
-    constexpr uintptr_t kColorStateSetBlendEnable         = 0x2597090;
-    constexpr uintptr_t kChannelMaskStateSetDefaults      = 0x25970c0;
-    constexpr uintptr_t kChannelMaskStateSetChannelMask   = 0x25970c8;
-    constexpr uintptr_t kPolygonStateSetDefaults          = 0x2597158;
-    constexpr uintptr_t kPolygonStateSetCullFace          = 0x2597160;
-    constexpr uintptr_t kDepthStencilStateSetDefaults     = 0x25971a0;
-    constexpr uintptr_t kDepthStencilStateSetDepthTestEnable = 0x25971a8;
+    constexpr uintptr_t kBlendStateSetDefaults         = 0x2596fd8;
+    constexpr uintptr_t kBlendStateSetBlendTarget      = 0x2596fe0;
+    constexpr uintptr_t kBlendStateSetBlendFunc        = 0x2596fe8;
+    constexpr uintptr_t kBlendStateSetBlendEquation    = 0x2596ff0;
+    constexpr uintptr_t kColorStateSetDefaults         = 0x2597050;
+    constexpr uintptr_t kColorStateSetBlendEnable      = 0x2597058;
+    constexpr uintptr_t kColorStateSetLogicOp          = 0x2597060;
+    constexpr uintptr_t kColorStateSetAlphaTest        = 0x2597068;
+    constexpr uintptr_t kChannelMaskStateSetDefaults   = 0x2597088;
+    constexpr uintptr_t kChannelMaskStateSetChannelMask= 0x2597090;
+    constexpr uintptr_t kPolygonStateSetDefaults       = 0x2597158;
+    constexpr uintptr_t kPolygonStateSetCullFace       = 0x2597160;
+    constexpr uintptr_t kDepthStencilStateSetDefaults  = 0x25971a0;
+    constexpr uintptr_t kDepthStencilStateSetDepthTestEnable  = 0x25971a8;
     constexpr uintptr_t kDepthStencilStateSetDepthWriteEnable = 0x25971b0;
     constexpr uintptr_t kVertexAttribStateSetDefaults    = 0x2597208;
     constexpr uintptr_t kVertexAttribStateSetFormat      = 0x2597210;
     constexpr uintptr_t kVertexAttribStateSetStreamIndex = 0x2597218;
     constexpr uintptr_t kVertexStreamStateSetDefaults    = 0x2597230;
     constexpr uintptr_t kVertexStreamStateSetStride      = 0x2597238;
+    constexpr uintptr_t kCommandBufferBindBlendState        = 0x25972e0;
     constexpr uintptr_t kCommandBufferBindChannelMaskState  = 0x25972e8;
     constexpr uintptr_t kCommandBufferBindColorState        = 0x25972f0;
     constexpr uintptr_t kCommandBufferBindPolygonState      = 0x2597300;
     constexpr uintptr_t kCommandBufferBindDepthStencilState = 0x2597308;
-    constexpr uintptr_t kCommandBufferBindProgram           = 0x2597320;
     constexpr uintptr_t kCommandBufferBindVertexAttribState = 0x2597310;
     constexpr uintptr_t kCommandBufferBindVertexStreamState = 0x2597318;
+    constexpr uintptr_t kCommandBufferBindProgram           = 0x2597320;
     constexpr uintptr_t kCommandBufferBindVertexBuffer      = 0x2597328;
     constexpr uintptr_t kCommandBufferSetViewport            = 0x2597448;
     constexpr uintptr_t kCommandBufferSetScissor             = 0x2597460;
@@ -193,8 +203,22 @@ struct NVNmemoryPool      { alignas(8) uint8_t reserved[0x100]; };
 struct NVNmemoryPoolBuilder { alignas(8) uint8_t reserved[0x40]; };
 struct NVNbuffer          { alignas(8) uint8_t reserved[0x30]; };
 struct NVNbufferBuilder   { alignas(8) uint8_t reserved[0x40]; };
-struct NVNvertexAttribState  { alignas(4) uint8_t reserved[0x8]; };
-struct NVNvertexStreamState  { alignas(8) uint8_t reserved[0x10]; };
+// Real sizes (4 / 8 bytes, nvn.h:274-281) - previously double their real size
+// (0x8/0x10), which silently broke every multi-element bind. Ghidra-confirmed
+// against real game code: sead::PrimitiveDrawMgrNvn::prepareFromBinaryImpl
+// (0x7100b01310) lays out three NVNvertexAttribStates exactly 4 bytes apart
+// (param_1+0x218/+0x21c/+0x220) and its one NVNvertexStreamState spans
+// exactly 8 bytes (+0x228 to +0x230, where the next distinct object starts).
+// This is almost certainly THE bug behind the rainbow quad rendering solid
+// black: nvnCommandBufferBindVertexAttribState(cmdBuf, 2, g_RainbowVertexAttribStates)
+// walks the array using the REAL 4-byte stride, so with our old 8-byte
+// struct, "element 1" (location 1 / a_Color) was read from byte offset 4 -
+// squarely inside element 0's padding - never touching the real color-attrib
+// data written to g_RainbowVertexAttribStates[1]. The driver treats that
+// slot as disabled, so a_Color always fetches zero, v_Color is always
+// (0,0,0,0), and the fragment shader dutifully outputs solid black.
+struct NVNvertexAttribState  { alignas(4) uint8_t reserved[0x4]; };
+struct NVNvertexStreamState  { alignas(8) uint8_t reserved[0x8]; };
 // Real size (128 bytes), confirmed against the actual nvn.h from a local NVN
 // SDK copy (NvnHeader/nvn/nvn.h:284-286) - see findings doc "BREAKTHROUGH".
 struct NVNprogram         { alignas(8) uint8_t reserved[0x80]; };
@@ -264,13 +288,25 @@ using FnCommandBufferSetShaderScratchMemory = void (*)(NVNcommandBuffer*, const 
 // doc's "Building the raw pipeline" section.
 struct NVNshaderData { uint64_t data; uint64_t control; };
 
-struct NVNcolorState { uint64_t reserved[8]; };
-struct NVNchannelMaskState { uint64_t reserved[8]; };
-struct NVNpolygonState { uint64_t reserved[8]; };
-struct NVNdepthStencilState { uint64_t reserved[8]; };
+// Real sizes (nvn.h:241-271) - previously 64 bytes each (uint64_t[8]), 8-16x
+// their real size. Harmless today only because every current call site binds
+// a single instance (bind*State takes one pointer, no count/array like
+// BindVertexAttribState) - but same defect class as the vertex-attrib-state
+// bug above, so fixed for correctness before anything ever arrays these.
+struct NVNblendState { alignas(8) uint8_t reserved[0x8]; };
+struct NVNcolorState { alignas(4) uint8_t reserved[0x4]; };
+struct NVNchannelMaskState { alignas(4) uint8_t reserved[0x4]; };
+struct NVNpolygonState { alignas(4) uint8_t reserved[0x4]; };
+struct NVNdepthStencilState { alignas(8) uint8_t reserved[0x8]; };
 
+using FnBlendStateSetDefaults = void (*)(NVNblendState*);
+using FnBlendStateSetBlendTarget = void (*)(NVNblendState*, int target);
+using FnBlendStateSetBlendFunc = void (*)(NVNblendState*, int srcFunc, int dstFunc, int srcAlphaFunc, int dstAlphaFunc);
+using FnBlendStateSetBlendEquation = void (*)(NVNblendState*, int modeRGB, int modeAlpha);
 using FnColorStateSetDefaults = void (*)(NVNcolorState*);
 using FnColorStateSetBlendEnable = void (*)(NVNcolorState*, int target, uint8_t enable);
+using FnColorStateSetLogicOp = void (*)(NVNcolorState*, int logicOp);
+using FnColorStateSetAlphaTest = void (*)(NVNcolorState*, int alphaTest);
 using FnChannelMaskStateSetDefaults = void (*)(NVNchannelMaskState*);
 using FnChannelMaskStateSetChannelMask = void (*)(NVNchannelMaskState*, int target, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 using FnPolygonStateSetDefaults = void (*)(NVNpolygonState*);
@@ -279,6 +315,7 @@ using FnDepthStencilStateSetDefaults = void (*)(NVNdepthStencilState*);
 using FnDepthStencilStateSetDepthTestEnable = void (*)(NVNdepthStencilState*, uint8_t enable);
 using FnDepthStencilStateSetDepthWriteEnable = void (*)(NVNdepthStencilState*, uint8_t enable);
 
+using FnCommandBufferBindBlendState = void (*)(NVNcommandBuffer*, const NVNblendState*);
 using FnCommandBufferBindColorState = void (*)(NVNcommandBuffer*, const NVNcolorState*);
 using FnCommandBufferBindChannelMaskState = void (*)(NVNcommandBuffer*, const NVNchannelMaskState*);
 using FnCommandBufferBindPolygonState = void (*)(NVNcommandBuffer*, const NVNpolygonState*);
@@ -1542,6 +1579,7 @@ namespace {
     NVNvertexStreamState g_CapturedDrawVertexStreamState;
     NVNvertexAttribState g_RainbowVertexAttribStates[2];
     NVNvertexStreamState g_RainbowVertexStreamState;
+    NVNblendState        g_RainbowBlendState;
     NVNdepthStencilState g_RainbowDepthStencilState;
     NVNpolygonState      g_RainbowPolygonState;
     NVNcolorState        g_RainbowColorState;
@@ -1594,6 +1632,9 @@ inline void EnsureCapturedDrawInitialized(void* gameFramework) {
     NvnFn<FnVertexStreamStateSetStride>(Offset::kVertexStreamStateSetStride)(&g_RainbowVertexStreamState, sizeof(RainbowVertex));
 
     // Pipeline State Objects (disable depth test/write, disable cull, overwrite color, full RGBA write mask)
+    auto blendSetDefaults = NvnFn<FnBlendStateSetDefaults>(Offset::kBlendStateSetDefaults);
+    if (blendSetDefaults) blendSetDefaults(&g_RainbowBlendState);
+
     auto dsSetDefaults    = NvnFn<FnDepthStencilStateSetDefaults>(Offset::kDepthStencilStateSetDefaults);
     auto dsSetDepthTest   = NvnFn<FnDepthStencilStateSetDepthTestEnable>(Offset::kDepthStencilStateSetDepthTestEnable);
     auto dsSetDepthWrite  = NvnFn<FnDepthStencilStateSetDepthWriteEnable>(Offset::kDepthStencilStateSetDepthWriteEnable);
@@ -1609,6 +1650,10 @@ inline void EnsureCapturedDrawInitialized(void* gameFramework) {
     auto colSetDefaults   = NvnFn<FnColorStateSetDefaults>(Offset::kColorStateSetDefaults);
     auto colSetBlend      = NvnFn<FnColorStateSetBlendEnable>(Offset::kColorStateSetBlendEnable);
     if (colSetDefaults) colSetDefaults(&g_RainbowColorState);
+    // Only disable blend — do NOT call SetLogicOp or SetAlphaTest.
+    // Calling SetLogicOp enables logic-op mode which can clobber fragment output.
+    // Calling SetAlphaTest may enable alpha-test with an undefined reference value.
+    // Defaults already give us normal (copy) color output.
     if (colSetBlend) colSetBlend(&g_RainbowColorState, 0, 0);
 
     auto chanSetDefaults  = NvnFn<FnChannelMaskStateSetDefaults>(Offset::kChannelMaskStateSetDefaults);
@@ -1620,60 +1665,67 @@ inline void EnsureCapturedDrawInitialized(void* gameFramework) {
     WIIXL_LOG("NvnOverlay: EnsureCapturedDrawInitialized OK");
 }
 
-namespace {
-    alignas(4096) uint8_t g_BnshCodePoolMemory[65536];
-    NVNmemoryPool g_BnshCodeMemoryPool;
-    NVNbuffer     g_BnshCodeBuffer;
-    NVNprogram*   g_LoadedBnshProgram = nullptr;
-    bool          g_BnshProgramLoaded = false;
-}
-
-inline NVNprogram* GetBnshProgram(void* graphicsNvn) {
-    if (g_BnshProgramLoaded) return g_LoadedBnshProgram;
-    g_BnshProgramLoaded = true;
-
+// Loads a sead-binary-format compiled shader (see pack_shader.py / rainbow's
+// GetBnshProgram history in docs/switch-nvn-findings.md) into caller-owned
+// static storage and returns the ready-to-bind NVNprogram*, or nullptr on
+// failure. Factored out of the original rainbow-only GetBnshProgram once a
+// second shader (plasma) needed the exact same load sequence - each caller
+// still needs its own dedicated static storage (code pool memory/NVNmemoryPool/
+// NVNbuffer/NVNprogram) since these are live GPU resources, not something that
+// can be shared/overwritten between two simultaneously-loaded programs.
+inline NVNprogram* LoadSeadBinaryProgram(
+        void* graphicsNvn, const uint8_t* seadBytes, size_t seadSize,
+        uint8_t* codePoolMemory, size_t codePoolMemorySize,
+        NVNmemoryPool* codeMemoryPool, NVNbuffer* codeBuffer,
+        NVNprogram* programStorage, const char* label) {
     if (!graphicsNvn) return nullptr;
     void* device = *reinterpret_cast<void**>(static_cast<uint8_t*>(graphicsNvn) + kGraphicsNvnDeviceOffset);
     if (!device) return nullptr;
 
+    if (seadSize > codePoolMemorySize) {
+        WIIXL_LOG("NvnOverlay: %s sead binary (%u bytes) exceeds pool memory (%u bytes)",
+            label, static_cast<unsigned int>(seadSize), static_cast<unsigned int>(codePoolMemorySize));
+        return nullptr;
+    }
+
     // 1. Copy sead-formatted binary into code pool memory FIRST
-    __builtin_memcpy(g_BnshCodePoolMemory, g_RainbowSeadBin, kRainbowSeadBinSize);
+    __builtin_memcpy(codePoolMemory, seadBytes, seadSize);
 
     // 2. Initialize Code Memory Pool (flag 0x62)
     NVNmemoryPoolBuilder codePoolBuilder{};
     NvnFn<FnMemoryPoolBuilderSetDefaults>(Offset::kMemoryPoolBuilderSetDefaults)(&codePoolBuilder);
     NvnFn<FnMemoryPoolBuilderSetDevice>(Offset::kMemoryPoolBuilderSetDevice)(&codePoolBuilder, device);
     NvnFn<FnMemoryPoolBuilderSetFlags>(Offset::kMemoryPoolBuilderSetFlags)(&codePoolBuilder, 0x62);
-    NvnFn<FnMemoryPoolBuilderSetStorage>(Offset::kMemoryPoolBuilderSetStorage)(&codePoolBuilder, g_BnshCodePoolMemory, sizeof(g_BnshCodePoolMemory));
-    int poolResult = NvnFn<FnMemoryPoolInitialize>(Offset::kMemoryPoolInitialize)(&g_BnshCodeMemoryPool, &codePoolBuilder);
-    WIIXL_LOG("NvnOverlay: BNSH CodePoolInitialize result=%d", poolResult);
+    NvnFn<FnMemoryPoolBuilderSetStorage>(Offset::kMemoryPoolBuilderSetStorage)(&codePoolBuilder, codePoolMemory, codePoolMemorySize);
+    int poolResult = NvnFn<FnMemoryPoolInitialize>(Offset::kMemoryPoolInitialize)(codeMemoryPool, &codePoolBuilder);
+    WIIXL_LOG("NvnOverlay: %s CodePoolInitialize result=%d", label, poolResult);
     if (!poolResult) return nullptr;
 
     // 3. Initialize Buffer on the Code Memory Pool
     NVNbufferBuilder codeBufBuilder{};
     NvnFn<FnBufferBuilderSetDevice>(Offset::kBufferBuilderSetDevice)(&codeBufBuilder, device);
     NvnFn<FnBufferBuilderSetDefaults>(Offset::kBufferBuilderSetDefaults)(&codeBufBuilder);
-    NvnFn<FnBufferBuilderSetStorage>(Offset::kBufferBuilderSetStorage)(&codeBufBuilder, &g_BnshCodeMemoryPool, 0, sizeof(g_BnshCodePoolMemory));
-    uint8_t bufResult = NvnFn<FnBufferInitialize>(Offset::kBufferInitialize)(&g_BnshCodeBuffer, &codeBufBuilder);
-    WIIXL_LOG("NvnOverlay: BNSH CodeBufferInitialize result=%d", bufResult);
+    NvnFn<FnBufferBuilderSetStorage>(Offset::kBufferBuilderSetStorage)(&codeBufBuilder, codeMemoryPool, 0, codePoolMemorySize);
+    uint8_t bufResult = NvnFn<FnBufferInitialize>(Offset::kBufferInitialize)(codeBuffer, &codeBufBuilder);
+    WIIXL_LOG("NvnOverlay: %s CodeBufferInitialize result=%d", label, bufResult);
     if (!bufResult) return nullptr;
 
-    uint64_t codeGpuBase = NvnFn<FnBufferGetAddress>(Offset::kBufferGetAddress)(&g_BnshCodeBuffer);
-    WIIXL_LOG("NvnOverlay: BNSH Code GPU Base=%p", reinterpret_cast<void*>(codeGpuBase));
+    uint64_t codeGpuBase = NvnFn<FnBufferGetAddress>(Offset::kBufferGetAddress)(codeBuffer);
+    WIIXL_LOG("NvnOverlay: %s Code GPU Base=%p", label, reinterpret_cast<void*>(codeGpuBase));
 
     // 4. Match device ISA version fields in the control headers inside the pool
     int32_t deviceIsaA = *reinterpret_cast<int32_t*>(static_cast<uint8_t*>(device) + 0x2c);
     int32_t deviceIsaB = *reinterpret_cast<int32_t*>(static_cast<uint8_t*>(device) + 0x30);
     WIIXL_LOG("NvnOverlay: Device ISA version A=%d, B=%d", deviceIsaA, deviceIsaB);
 
-    uint32_t* hdr = reinterpret_cast<uint32_t*>(g_BnshCodePoolMemory);
+    uint32_t* hdr = reinterpret_cast<uint32_t*>(codePoolMemory);
     uint32_t offVertCtrl = hdr[0];
     uint32_t offFragCtrl = hdr[1];
     uint32_t offVertCode = hdr[2];
     uint32_t offFragCode = hdr[3];
 
-    uint8_t* vertControl = g_BnshCodePoolMemory + offVertCtrl;
-    uint8_t* fragControl = g_BnshCodePoolMemory + offFragCtrl;
+    uint8_t* vertControl = codePoolMemory + offVertCtrl;
+    uint8_t* fragControl = codePoolMemory + offFragCtrl;
 
     uint32_t* vWords = reinterpret_cast<uint32_t*>(vertControl);
     uint32_t* fWords = reinterpret_cast<uint32_t*>(fragControl);
@@ -1686,10 +1738,10 @@ inline NVNprogram* GetBnshProgram(void* graphicsNvn) {
     fWords[3] = deviceIsaA;
     fWords[4] = deviceIsaB;
 
-    WIIXL_LOG("NvnOverlay: Vert control header: 0x%x 0x%x 0x%x 0x%x 0x%x",
-        vWords[0], vWords[1], vWords[2], vWords[3], vWords[4]);
-    WIIXL_LOG("NvnOverlay: Frag control header: 0x%x 0x%x 0x%x 0x%x 0x%x",
-        fWords[0], fWords[1], fWords[2], fWords[3], fWords[4]);
+    WIIXL_LOG("NvnOverlay: %s vert control header: 0x%x 0x%x 0x%x 0x%x 0x%x",
+        label, vWords[0], vWords[1], vWords[2], vWords[3], vWords[4]);
+    WIIXL_LOG("NvnOverlay: %s frag control header: 0x%x 0x%x 0x%x 0x%x 0x%x",
+        label, fWords[0], fWords[1], fWords[2], fWords[3], fWords[4]);
 
     NVNshaderData stages[2] = {
         { codeGpuBase + offVertCode, reinterpret_cast<uint64_t>(vertControl) },
@@ -1699,19 +1751,60 @@ inline NVNprogram* GetBnshProgram(void* graphicsNvn) {
     auto programInitialize = NvnFn<FnProgramInitialize>(Offset::kProgramInitialize);
     auto programSetShaders = NvnFn<FnProgramSetShaders>(Offset::kProgramSetShaders);
 
-    static NVNprogram s_DirectRainbowProgram{};
-    uint8_t initResult = programInitialize(&s_DirectRainbowProgram, device);
-    WIIXL_LOG("NvnOverlay: Direct ProgramInitialize result=%d", initResult);
+    uint8_t initResult = programInitialize(programStorage, device);
+    WIIXL_LOG("NvnOverlay: %s ProgramInitialize result=%d", label, initResult);
 
-    uint8_t setShadersResult = programSetShaders(&s_DirectRainbowProgram, 2, stages);
-    WIIXL_LOG("NvnOverlay: Direct ProgramSetShaders result=%d", setShadersResult);
+    uint8_t setShadersResult = programSetShaders(programStorage, 2, stages);
+    WIIXL_LOG("NvnOverlay: %s ProgramSetShaders result=%d", label, setShadersResult);
     if (setShadersResult) {
-        g_LoadedBnshProgram = &s_DirectRainbowProgram;
-        WIIXL_LOG("NvnOverlay: Direct Rainbow NVNprogram ready at %p!", g_LoadedBnshProgram);
-        return g_LoadedBnshProgram;
+        WIIXL_LOG("NvnOverlay: %s NVNprogram ready at %p!", label, programStorage);
+        return programStorage;
     }
 
     return nullptr;
+}
+
+namespace {
+    alignas(4096) uint8_t g_BnshCodePoolMemory[65536];
+    NVNmemoryPool g_BnshCodeMemoryPool;
+    NVNbuffer     g_BnshCodeBuffer;
+    NVNprogram    g_BnshProgramStorage{};
+    NVNprogram*   g_LoadedBnshProgram = nullptr;
+    bool          g_BnshProgramLoaded = false;
+
+    alignas(4096) uint8_t g_PlasmaCodePoolMemory[65536];
+    NVNmemoryPool g_PlasmaCodeMemoryPool;
+    NVNbuffer     g_PlasmaCodeBuffer;
+    NVNprogram    g_PlasmaProgramStorage{};
+    NVNprogram*   g_LoadedPlasmaProgram = nullptr;
+    bool          g_PlasmaProgramLoaded = false;
+}
+
+inline NVNprogram* GetBnshProgram(void* graphicsNvn) {
+    if (g_BnshProgramLoaded) return g_LoadedBnshProgram;
+    g_BnshProgramLoaded = true;
+    g_LoadedBnshProgram = LoadSeadBinaryProgram(
+        graphicsNvn, g_RainbowSeadBin, kRainbowSeadBinSize,
+        g_BnshCodePoolMemory, sizeof(g_BnshCodePoolMemory),
+        &g_BnshCodeMemoryPool, &g_BnshCodeBuffer, &g_BnshProgramStorage, "Rainbow");
+    return g_LoadedBnshProgram;
+}
+
+// Custom-compiled demo shader (shaders/plasma.vert + shaders/plasma.frag,
+// packed via scripts/pack_shader.py) - an animated, screen-space plasma
+// effect. Uses the exact same vertex plumbing already proven working for the
+// rainbow quad (position + a repurposed vertex-color channel), so it needs
+// zero new NVN binding code - just a different compiled program and a
+// per-frame value written into the existing color attribute (see
+// DrawPlasmaQuadDirect).
+inline NVNprogram* GetPlasmaProgram(void* graphicsNvn) {
+    if (g_PlasmaProgramLoaded) return g_LoadedPlasmaProgram;
+    g_PlasmaProgramLoaded = true;
+    g_LoadedPlasmaProgram = LoadSeadBinaryProgram(
+        graphicsNvn, g_PlasmaSeadBin, kPlasmaSeadBinSize,
+        g_PlasmaCodePoolMemory, sizeof(g_PlasmaCodePoolMemory),
+        &g_PlasmaCodeMemoryPool, &g_PlasmaCodeBuffer, &g_PlasmaProgramStorage, "Plasma");
+    return g_LoadedPlasmaProgram;
 }
 
 inline void DrawBnshQuad(void* gameFramework, float r, float g, float b, float a);
@@ -2038,16 +2131,23 @@ inline void DrawBnshQuadDirect(NVNcommandBuffer* cmdBuf, void* dstTexture) {
         { 0.7f, -0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 1.0f, 1.0f}, // Bottom-right (Blue)
     };
     __builtin_memcpy(mapped, verts, sizeof(verts));
+    armDCacheFlush(mapped, sizeof(verts));
+
+    // Diagnostic: confirm what we wrote — log first vertex color (should be 1,0,0,1 = Red)
+    static bool s_VertLogDone = false;
+    if (!s_VertLogDone) {
+        s_VertLogDone = true;
+        const float* f = reinterpret_cast<const float*>(mapped);
+        // f[0..3]=pos, f[4..7]=color
+        WIIXL_LOG("NvnOverlay: vert[0] pos=(%.2f,%.2f,%.2f,%.2f) color=(%.2f,%.2f,%.2f,%.2f)",
+            f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]);
+    }
 
     uint64_t gpuBase = NvnFn<FnBufferGetAddress>(Offset::kBufferGetAddress)(&g_CapturedDrawDataBuffer);
 
     auto setRenderTargets      = NvnFn<FnCommandBufferSetRenderTargets>(Offset::kCommandBufferSetRenderTargets);
     auto setViewport           = NvnFn<FnCommandBufferSetViewport>(Offset::kCommandBufferSetViewport);
     auto setScissor            = NvnFn<FnCommandBufferSetScissor>(Offset::kCommandBufferSetScissor);
-    auto bindDepthStencil      = NvnFn<FnCommandBufferBindDepthStencilState>(Offset::kCommandBufferBindDepthStencilState);
-    auto bindPolygon           = NvnFn<FnCommandBufferBindPolygonState>(Offset::kCommandBufferBindPolygonState);
-    auto bindColor             = NvnFn<FnCommandBufferBindColorState>(Offset::kCommandBufferBindColorState);
-    auto bindChannelMask       = NvnFn<FnCommandBufferBindChannelMaskState>(Offset::kCommandBufferBindChannelMaskState);
     auto bindProgram           = NvnFn<FnCommandBufferBindProgram>(Offset::kCommandBufferBindProgram);
     auto bindVertexAttribState = NvnFn<FnCommandBufferBindVertexAttribState>(Offset::kCommandBufferBindVertexAttribState);
     auto bindVertexStreamState = NvnFn<FnCommandBufferBindVertexStreamState>(Offset::kCommandBufferBindVertexStreamState);
@@ -2057,10 +2157,11 @@ inline void DrawBnshQuadDirect(NVNcommandBuffer* cmdBuf, void* dstTexture) {
     const void* colorTargets[1] = { dstTexture };
     if (setRenderTargets) setRenderTargets(cmdBuf, 1, colorTargets, nullptr, nullptr, nullptr);
 
-    if (bindDepthStencil) bindDepthStencil(cmdBuf, &g_RainbowDepthStencilState);
-    if (bindPolygon) bindPolygon(cmdBuf, &g_RainbowPolygonState);
-    if (bindColor) bindColor(cmdBuf, &g_RainbowColorState);
-    if (bindChannelMask) bindChannelMask(cmdBuf, &g_RainbowChannelMaskState);
+    // Strip ALL state object binds for now.
+    // We previously got yellow (wrong state offsets), now solid black.
+    // Each state we bind might be killing the output. Inherit the game's
+    // last-bound state for EVERYTHING (color, blend, channelmask, depth, polygon).
+    // The game's state allows color writes (BotW renders correctly).
 
     int width = 1280;
     int height = 720;
@@ -2089,6 +2190,95 @@ inline void DrawBnshQuadDirect(NVNcommandBuffer* cmdBuf, void* dstTexture) {
     static uint32_t s_DirectDrawCount = 0;
     if ((s_DirectDrawCount++ % 120) == 0) {
         WIIXL_LOG("NvnOverlay: Direct rainbow quad drawn on swapchain texture %p (%dx%d, frame #%u)", dstTexture, width, height, s_DirectDrawCount);
+    }
+}
+
+// Custom-shader demo: identical to DrawBnshQuadDirect above (same command
+// buffer, same render target, same vertex attribute layout, same proven state
+// handling) except it binds GetPlasmaProgram() instead of GetBnshProgram(),
+// and repurposes each vertex's .a color channel to carry a per-frame "time"
+// value instead of a fixed 1.0 alpha - shaders/plasma.frag reads it back out
+// of v_Color.a to animate. No new NVN binding (no UBO, no texture) was needed
+// to get a fully custom, animated fragment effect running - proof the whole
+// pipeline generalizes past the original flat-interpolated-color rainbow.
+inline void DrawPlasmaQuadDirect(NVNcommandBuffer* cmdBuf, void* dstTexture) {
+    if (!g_CapturedDrawInitialized) return;
+    void* graphicsNvn = GetGraphicsNvnInstance();
+    if (!graphicsNvn) return;
+
+    NVNprogram* program = GetPlasmaProgram(graphicsNvn);
+    if (!program) return;
+
+    void* mapped = NvnFn<FnBufferMap>(Offset::kBufferMap)(&g_CapturedDrawDataBuffer);
+    if (!mapped) return;
+
+    static uint32_t s_FrameCount = 0;
+    float t = static_cast<float>(s_FrameCount++) * 0.033f; // ~2 radians/sec at 60fps
+
+    RainbowVertex verts[12] = {
+        // Triangle 1 (CCW)
+        {-0.7f,  0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+        {-0.7f, -0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+        { 0.7f, -0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+
+        // Triangle 2 (CCW)
+        {-0.7f,  0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+        { 0.7f, -0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+        { 0.7f,  0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+
+        // Triangle 1 (CW)
+        {-0.7f,  0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+        { 0.7f, -0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+        {-0.7f, -0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+
+        // Triangle 2 (CW)
+        {-0.7f,  0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+        { 0.7f,  0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+        { 0.7f, -0.7f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f, t},
+    };
+    __builtin_memcpy(mapped, verts, sizeof(verts));
+    armDCacheFlush(mapped, sizeof(verts));
+
+    uint64_t gpuBase = NvnFn<FnBufferGetAddress>(Offset::kBufferGetAddress)(&g_CapturedDrawDataBuffer);
+
+    auto setRenderTargets      = NvnFn<FnCommandBufferSetRenderTargets>(Offset::kCommandBufferSetRenderTargets);
+    auto setViewport           = NvnFn<FnCommandBufferSetViewport>(Offset::kCommandBufferSetViewport);
+    auto setScissor            = NvnFn<FnCommandBufferSetScissor>(Offset::kCommandBufferSetScissor);
+    auto bindProgram           = NvnFn<FnCommandBufferBindProgram>(Offset::kCommandBufferBindProgram);
+    auto bindVertexAttribState = NvnFn<FnCommandBufferBindVertexAttribState>(Offset::kCommandBufferBindVertexAttribState);
+    auto bindVertexStreamState = NvnFn<FnCommandBufferBindVertexStreamState>(Offset::kCommandBufferBindVertexStreamState);
+    auto bindVertexBuffer      = NvnFn<FnCommandBufferBindVertexBuffer>(Offset::kCommandBufferBindVertexBuffer);
+    auto drawArrays            = NvnFn<FnCommandBufferDrawArrays>(Offset::kCommandBufferDrawArrays);
+
+    const void* colorTargets[1] = { dstTexture };
+    if (setRenderTargets) setRenderTargets(cmdBuf, 1, colorTargets, nullptr, nullptr, nullptr);
+
+    int width = 1280;
+    int height = 720;
+    void* displayBuffer = *reinterpret_cast<void**>(static_cast<uint8_t*>(graphicsNvn) + 0x50);
+    if (displayBuffer) {
+        float fW = *reinterpret_cast<float*>(static_cast<uint8_t*>(displayBuffer) + 8);
+        float fH = *reinterpret_cast<float*>(static_cast<uint8_t*>(displayBuffer) + 12);
+        if (fW > 0.0f && fH > 0.0f) {
+            width = static_cast<int>(fW);
+            height = static_cast<int>(fH);
+        }
+    }
+
+    if (setViewport) setViewport(cmdBuf, 0, 0, width, height);
+    if (setScissor) setScissor(cmdBuf, 0, 0, width, height);
+
+    constexpr uint32_t kStageMaskVertexFragment = 0x1 | 0x2;
+    constexpr int kPrimitiveTriangles = 4;
+
+    bindProgram(cmdBuf, reinterpret_cast<const NVNprogram*>(program), kStageMaskVertexFragment);
+    bindVertexAttribState(cmdBuf, 2, g_RainbowVertexAttribStates);
+    bindVertexStreamState(cmdBuf, 1, &g_RainbowVertexStreamState);
+    bindVertexBuffer(cmdBuf, 0, gpuBase, sizeof(verts));
+    drawArrays(cmdBuf, kPrimitiveTriangles, 0, 12);
+
+    if ((s_FrameCount % 120) == 0) {
+        WIIXL_LOG("NvnOverlay: Plasma quad drawn on swapchain texture %p (%dx%d, t=%d)", dstTexture, width, height, static_cast<int>(t * 1000));
     }
 }
 
