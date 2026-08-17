@@ -8,20 +8,23 @@ output against the hand-built include/rainbow_sead_bin.hpp that's proven to rend
 correctly in-game (see docs/switch-nvn-findings.md, "Rainbow quad rendered solid
 black" section and onward). Concretely:
 
-  - ShaderConverter's raw archive contains one or more blocks tagged with GLSLC's
-    control-section magic (0x98761234, little-endian bytes 34 12 76 98). The FIRST
-    such block, taken up to (but not including) the SECOND occurrence of that same
-    magic, is a real, self-consistent, driver-accepted control blob - copied
-    verbatim and reused unmodified for BOTH the vertex and fragment control
-    sections (proven safe: the currently-deployed rainbow shader uses this exact
-    control blob, byte-identical for both stages - stage identity comes from
-    argument position in nvnProgramSetShaders's NVNshaderData array, not anything
-    inside the control blob).
+  - ShaderConverter's raw archive contains two blocks tagged with GLSLC's
+    control-section magic (0x98761234, little-endian bytes 34 12 76 98) - one
+    real, distinct control blob per stage, NOT duplicates of each other (an
+    earlier version of this tool assumed they were byte-identical and reused
+    just the first for both stages; that produced a control blob for the
+    fragment stage with the wrong "stage bucket" flag and a content
+    fingerprint matching the vertex stage's code instead of its own, which
+    the driver rejects at bind time - see docs/switch-nvn-findings.md's "real
+    root cause" section for the full byte-level diff that found this).
   - Each stage's compiled SASS machine code is tagged with a DATA magic
     (0x12345678, little-endian bytes 78 56 34 12). For a --separable two-stage
     (vertex + pixel) compile, the first occurrence is vertex code, the second is
     fragment code - confirmed by locating the EXACT byte sequence already embedded
     in rainbow_sead_bin.hpp's code sections inside the raw compiler output.
+  - Each code section's file offset must be 256-byte aligned (confirmed by
+    comparing this tool's own unaligned first-attempt output against the
+    aligned, working hand-built file).
   - At load time (NvnOverlay::GetBnshProgram in nvn_overlay.hpp), only two control
     fields are patched at runtime: the version word and the two device-ISA words -
     everything else in the control blob is used exactly as baked in here.
@@ -84,7 +87,26 @@ def compile_bnsh(vertex_glsl: pathlib.Path, fragment_glsl: pathlib.Path, tmp_out
     return tmp_out.read_bytes()
 
 
-def extract_control_template(bnsh: bytes) -> bytes:
+def extract_control_templates(bnsh: bytes) -> tuple[bytes, bytes]:
+    """Returns (vertex_control, fragment_control) - two DISTINCT blocks, not
+    the same one reused. Earlier versions of this tool treated the two
+    control-magic (0x98761234) occurrences in the raw compiler output as
+    byte-identical duplicates and copied only the first for both stages -
+    wrong, and the real cause of every "ProgramSetShaders result=0" bind
+    failure this tool produced. Diffing the working, hand-built
+    rainbow_sead_bin.hpp's real vertex vs. fragment control sections found 31
+    real differing bytes: a per-stage "bucket" flag at relative offset 0x714/
+    0x734 (matches docs/switch-nvn-findings.md's independently-decompiled
+    "stage bucket" finding) and, most importantly, a 24-byte block at
+    0x7d0-0x7e7 that looks like a per-stage content fingerprint/hash - and the
+    raw compiler output's two control-magic blocks differ at those EXACT same
+    31 byte offsets, with the exact same 0->1 pattern at 0x714/0x734. That's
+    conclusive: the second block is the real, distinct fragment control
+    section, not a duplicate - and blindly reusing the vertex one for
+    fragment left the fragment section with the wrong stage bucket and a
+    hash that matches the wrong stage's code, which the driver presumably
+    checks against the actual code it's being handed.
+    """
     hits = find_all(bnsh, CTRL_MAGIC)
     if len(hits) < 2:
         sys.exit(
@@ -92,8 +114,47 @@ def extract_control_template(bnsh: bytes) -> bytes:
             "compiler output shape may have changed, needs re-verification against "
             "docs/switch-nvn-findings.md before trusting this tool's output."
         )
-    start, end = hits[0], hits[1]
-    return bnsh[start:end]
+    vert_start, frag_start = hits[0], hits[1]
+    block_len = frag_start - vert_start
+    vert_control = bnsh[vert_start:frag_start]
+    frag_control = bnsh[frag_start:frag_start + block_len]
+    if len(frag_control) < block_len:
+        sys.exit("Fragment control block runs past end of file - unexpected compiler output shape.")
+    return vert_control, frag_control
+
+
+# Real content for a stage (code, plus - for shaders with enough float/int
+# literals - one or more separate inline constant-pool chunks further out,
+# each with no marker of its own, separated from the code and from each
+# other by real internal alignment gaps up to ~64 bytes wide, confirmed
+# empirically) is never the LAST thing before a hard, confirmed boundary -
+# there's always real, non-zero, unrelated container data (a debug string
+# table - confirmed by finding the literal source-file basename inside it)
+# starting comfortably further out (~2800-3500 bytes past the last stage's
+# start on two real test shaders). A zero-run-length heuristic to tell
+# "internal gap" from "true end" turned out fragile in both directions (a
+# short threshold false-triggers inside an internal gap and truncates real
+# data - confirmed on the plasma shader; a long threshold can run out of room
+# before an early stage's hard boundary and falsely include trailing padding
+# - confirmed on rainbow's vertex stage, which only has ~192 zero bytes
+# before the next stage starts). Simpler and exact instead: whenever a stage
+# has a REAL next boundary (the next stage's own data-magic marker - stages
+# are packed back-to-back) use that directly and just take the last non-zero
+# byte before it - unambiguous, no heuristic. Only the LAST stage lacks such
+# a marker; there, use SAFE_CAP, a fixed distance comfortably smaller than
+# every observed real "start of container data" and comfortably larger than
+# every observed real content length - not a proof for arbitrary future
+# shaders, but a wide, checked margin on the two data points available.
+SAFE_CAP = 0x800  # 2048 bytes
+
+
+def region_length(bnsh: bytes, start: int, bound: int) -> int:
+    """Distance from `start` to the last non-zero byte before `bound`, plus
+    one. See the SAFE_CAP comment above for what `bound` must be."""
+    last = bound - 1
+    while last >= start and bnsh[last] == 0:
+        last -= 1
+    return (last - start + 1) if last >= start else 0
 
 
 def extract_code_regions(bnsh: bytes) -> tuple[bytes, bytes]:
@@ -104,41 +165,53 @@ def extract_code_regions(bnsh: bytes) -> tuple[bytes, bytes]:
             f"found {len(hits)}."
         )
     vert_start, frag_start = hits[0], hits[1]
-    # ShaderConverter lays each stage's compiled code out in a fixed-size,
-    # aligned slot (confirmed empirically: two independent compiles of the same
-    # source both placed vertex/fragment data-magic markers exactly 0x200 bytes
-    # apart). Reuse that same slot size for the LAST stage too, rather than
-    # scanning to EOF - the raw archive has real, non-zero trailing sections
-    # after the code (debug/variation bookkeeping, even without --reflection)
-    # that a naive "trim trailing zeros up to EOF" scan would wrongly scoop up.
-    slot_size = frag_start - vert_start
-    if len(hits) >= 3:
-        slot_size = min(slot_size, hits[2] - frag_start)
+    vert_bound = frag_start  # exact: the next stage's own real marker
 
-    def trim(buf: bytes) -> bytes:
-        last = len(buf)
-        while last > 4 and buf[last - 1] == 0:
-            last -= 1
-        # pad back up to a 32-byte alignment, generous margin past the last
-        # real instruction word, matching the spirit of the existing project's
-        # "generously padded past every known-touched offset" convention.
-        padded = ((last + 31) // 32) * 32
-        return buf[:padded].ljust(padded, b"\x00")
+    later_data_hits = [h for h in hits[2:] if h > frag_start]
+    frag_bound = min(later_data_hits[0], frag_start + SAFE_CAP) if later_data_hits else frag_start + SAFE_CAP
+    frag_bound = min(frag_bound, len(bnsh))
 
-    vert_raw = bnsh[vert_start:vert_start + slot_size]
-    frag_raw = bnsh[frag_start:frag_start + slot_size]
-    return trim(vert_raw), trim(frag_raw)
+    def trim_and_pad(region_start: int, length: int) -> bytes:
+        # pad up to a 32-byte alignment as a small, harmless safety margin past
+        # the exact real length found - not load-bearing, just tidy.
+        padded = ((length + 31) // 32) * 32
+        return bnsh[region_start:region_start + padded].ljust(padded, b"\x00")
+
+    vert_len = region_length(bnsh, vert_start, vert_bound)
+    frag_len = region_length(bnsh, frag_start, frag_bound)
+    return trim_and_pad(vert_start, vert_len), trim_and_pad(frag_start, frag_len)
 
 
-def pack_sead_binary(control_template: bytes, vert_code: bytes, frag_code: bytes) -> bytes:
+CODE_ALIGNMENT = 0x100  # 256 bytes
+
+
+def align_up(value: int, alignment: int) -> int:
+    return (value + alignment - 1) // alignment * alignment
+
+
+def pack_sead_binary(vert_control: bytes, frag_control: bytes, vert_code: bytes, frag_code: bytes) -> bytes:
+    # Each code section's file offset must be 256-byte aligned - confirmed by
+    # comparing this tool's own first-attempt output (unaligned, code placed
+    # immediately after the two control blocks with no padding) against the
+    # known-good, hand-built rainbow_sead_bin.hpp: nvnProgramSetShaders bound
+    # the unaligned layout successfully for ZERO shaders (including a repack
+    # of the exact same rainbow source the hand-built file uses), while the
+    # 256-aligned hand-built file always worked. Real GPU shader code commonly
+    # requires this kind of alignment for instruction fetch; the hand-built
+    # file's 0x1200/0x1400 code offsets are both exact multiples of 0x100.
     header_size = 0x10
     vert_ctrl_off = header_size
-    frag_ctrl_off = vert_ctrl_off + len(control_template)
-    vert_code_off = frag_ctrl_off + len(control_template)
-    frag_code_off = vert_code_off + len(vert_code)
+    frag_ctrl_off = vert_ctrl_off + len(vert_control)
+    vert_code_off = align_up(frag_ctrl_off + len(frag_control), CODE_ALIGNMENT)
+    frag_code_off = align_up(vert_code_off + len(vert_code), CODE_ALIGNMENT)
 
     header = struct.pack("<IIII", vert_ctrl_off, frag_ctrl_off, vert_code_off, frag_code_off)
-    return header + control_template + control_template + vert_code + frag_code
+    buf = bytearray(header + vert_control + frag_control)
+    buf += b"\x00" * (vert_code_off - len(buf))
+    buf += vert_code
+    buf += b"\x00" * (frag_code_off - len(buf))
+    buf += frag_code
+    return bytes(buf)
 
 
 def emit_header(data: bytes, name: str, out_path: pathlib.Path) -> None:
@@ -174,12 +247,12 @@ def main() -> None:
         tmp_bnsh = pathlib.Path(tmpdir) / "out.bnsh"
         bnsh = compile_bnsh(args.vertex_glsl, args.fragment_glsl, tmp_bnsh)
 
-    control_template = extract_control_template(bnsh)
+    vert_control, frag_control = extract_control_templates(bnsh)
     vert_code, frag_code = extract_code_regions(bnsh)
-    print(f"control template: {len(control_template)} bytes")
+    print(f"vertex control: {len(vert_control)} bytes, fragment control: {len(frag_control)} bytes")
     print(f"vertex code: {len(vert_code)} bytes, fragment code: {len(frag_code)} bytes")
 
-    packed = pack_sead_binary(control_template, vert_code, frag_code)
+    packed = pack_sead_binary(vert_control, frag_control, vert_code, frag_code)
 
     out_file = args.out / f"{args.output_name.lower()}_sead_bin.hpp"
     emit_header(packed, args.output_name, out_file)

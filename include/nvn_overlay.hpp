@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <rainbow_bnsh.hpp>
 #include <rainbow_sead_bin.hpp>
+#include <rainbowselftest_sead_bin.hpp>
 #include <plasma_sead_bin.hpp>
 #include <wiixl_quad_bnsh_bytes.hpp>
 #include <texture_shader_bnsh_bytes.hpp>
@@ -1778,6 +1779,19 @@ namespace {
     NVNprogram    g_PlasmaProgramStorage{};
     NVNprogram*   g_LoadedPlasmaProgram = nullptr;
     bool          g_PlasmaProgramLoaded = false;
+
+    // Diagnostic only (see docs/switch-nvn-findings.md, "plasma bind failure"
+    // investigation) - pack_shader.py's own repack of the SAME rainbow.vert/
+    // rainbow.frag source that g_RainbowSeadBin was hand-built from. Never
+    // drawn; loading it (and only it, alongside the known-good hand-built
+    // rainbow and the failing plasma) isolates whether pack_shader.py's
+    // overall file layout is sound, independent of plasma's larger code.
+    alignas(4096) uint8_t g_RainbowSelftestCodePoolMemory[65536];
+    NVNmemoryPool g_RainbowSelftestCodeMemoryPool;
+    NVNbuffer     g_RainbowSelftestCodeBuffer;
+    NVNprogram    g_RainbowSelftestProgramStorage{};
+    NVNprogram*   g_LoadedRainbowSelftestProgram = nullptr;
+    bool          g_RainbowSelftestProgramLoaded = false;
 }
 
 inline NVNprogram* GetBnshProgram(void* graphicsNvn) {
@@ -1805,6 +1819,18 @@ inline NVNprogram* GetPlasmaProgram(void* graphicsNvn) {
         g_PlasmaCodePoolMemory, sizeof(g_PlasmaCodePoolMemory),
         &g_PlasmaCodeMemoryPool, &g_PlasmaCodeBuffer, &g_PlasmaProgramStorage, "Plasma");
     return g_LoadedPlasmaProgram;
+}
+
+// Diagnostic only - see the g_RainbowSelftest* storage comment above.
+inline NVNprogram* GetRainbowSelftestProgram(void* graphicsNvn) {
+    if (g_RainbowSelftestProgramLoaded) return g_LoadedRainbowSelftestProgram;
+    g_RainbowSelftestProgramLoaded = true;
+    g_LoadedRainbowSelftestProgram = LoadSeadBinaryProgram(
+        graphicsNvn, g_RainbowSelftestSeadBin, kRainbowSelftestSeadBinSize,
+        g_RainbowSelftestCodePoolMemory, sizeof(g_RainbowSelftestCodePoolMemory),
+        &g_RainbowSelftestCodeMemoryPool, &g_RainbowSelftestCodeBuffer,
+        &g_RainbowSelftestProgramStorage, "RainbowSelftest");
+    return g_LoadedRainbowSelftestProgram;
 }
 
 inline void DrawBnshQuad(void* gameFramework, float r, float g, float b, float a);
@@ -2302,7 +2328,7 @@ inline NVNcommandHandle HookedCommandBufferEndRecording(NVNcommandBuffer* cmdBuf
                     void* dstTexture = *reinterpret_cast<void**>(
                         static_cast<uint8_t*>(displayBuffer) + 0x28 + activeIdx * 8);
                     if (dstTexture) {
-                        DrawBnshQuadDirect(cmdBuf, dstTexture);
+                        DrawPlasmaQuadDirect(cmdBuf, dstTexture);
                     }
                 }
             }

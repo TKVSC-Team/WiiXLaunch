@@ -16,6 +16,8 @@ WIIXL_HOOK_DEFINE_TRAMPOLINE(ProcDrawHook) {
         if (graphicsNvn) {
             NvnOverlay::EnsureCapturedDrawInitialized(gameFramework);
             NvnOverlay::GetBnshProgram(graphicsNvn);
+            NvnOverlay::GetRainbowSelftestProgram(graphicsNvn); // diagnostic only - see docs/switch-nvn-findings.md
+            NvnOverlay::GetPlasmaProgram(graphicsNvn);
             NvnOverlay::EnsureEndRecordingHookInstalled();
         }
         Orig(gameFramework);
