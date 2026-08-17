@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import glob
 import json
 import os
 import re
@@ -134,17 +135,23 @@ version = 7
         # g_CodeCaveBase. cemu.ld brackets that exact instruction range with
         # these two symbols so we can exclude it purely by address, without
         # guessing at offsets.
+        # Symbol table, as a name->address dict (the ELF links at base 0, so
+        # a symbol's link-time address IS its byte offset into the flat
+        # binary) - reused below both for the bootstrap-range exclusion and
+        # for patching per-file shim-table offsets into payload_data.
         syms_out = subprocess.check_output([readelf_cmd, "-s", "-W", elf_path], text=True)
-        bootstrap_start, bootstrap_end = None, None
+        sym_dict = {}
         for line in syms_out.splitlines():
             parts = line.split()
             if len(parts) < 8:
                 continue
-            name = parts[7]
-            if name == "__wiixl_bootstrap_start":
-                bootstrap_start = int(parts[1], 16)
-            elif name == "__wiixl_bootstrap_end":
-                bootstrap_end = int(parts[1], 16)
+            try:
+                sym_dict[parts[7]] = int(parts[1], 16)
+            except ValueError:
+                continue  # header row ("Num:  Value  Size Type ..."), not a real symbol
+
+        bootstrap_start = sym_dict.get("__wiixl_bootstrap_start")
+        bootstrap_end = sym_dict.get("__wiixl_bootstrap_end")
         if bootstrap_start is None or bootstrap_end is None:
             raise RuntimeError("__wiixl_bootstrap_start/end symbols not found - check scripts/cemu.ld")
 
@@ -202,19 +209,105 @@ version = 7
         num_relocs = len(reloc_offsets)
         binary_size = len(payload_data)
         entry_hook = int(cemu_cfg.get("entry_hook", "0x00000000"), 16)
-        
+
         cemu_asm_content += f"# --- WiiXLaunch Self-Relocating C++ Payload ---\n"
         cemu_asm_content += ".origin = codecave\n"
         cemu_asm_content += "wiixlaunch_codecave_start:\n"
         cemu_asm_content += "  b wiixlaunch_reloc_stub\n"
         cemu_asm_content += "wiixlaunch_reloc_flag:\n"
         cemu_asm_content += "  .int 0\n\n"
-        
+
+        # Measured by parsing, not hand-counted: every real content line in
+        # an included src/cemu/*.asm file (an instruction or a `.int`) is
+        # exactly one 4-byte PPC word; labels (end in `:`), comments (start
+        # with `#`), blank lines, and `.origin` directives emit nothing. A
+        # future file that needs `.short`/`.byte`/multi-word directives would
+        # need this parser extended, not just a bigger constant somewhere.
+        def count_asm_words(asm_text):
+            words = 0
+            for raw_line in asm_text.splitlines():
+                line = raw_line.split("#", 1)[0].strip()
+                if not line or line.endswith(":") or line.startswith(".origin"):
+                    continue
+                words += 1
+            return words
+
+        # src/cemu/*.asm goes immediately after wiixlaunch_binary's bytes,
+        # still inside the same codecave/.origin block - both this project's
+        # own src/cemu/, AND any vendor/wiixlaunch-*/src/cemu/ (e.g.
+        # wiixlaunch-botw's gx2_imports.asm/cemu_logging.asm). Order is
+        # deterministic (sorted by full path) since each file's own starting
+        # byte offset within this appended block depends on this exact
+        # concatenation order.
+        cemu_asm_dirs = [os.path.join(root_dir, "src", "cemu")]
+        for vendor_dir in sorted(glob.glob(os.path.join(root_dir, "vendor", "wiixlaunch-*"))):
+            candidate = os.path.join(vendor_dir, "src", "cemu")
+            if os.path.isdir(candidate):
+                cemu_asm_dirs.append(candidate)
+
+        cemu_asm_files = []
+        for cemu_src_dir in cemu_asm_dirs:
+            if not os.path.exists(cemu_src_dir):
+                continue
+            for cemu_src_root, _, cemu_src_files in os.walk(cemu_src_dir):
+                for cemu_src_file in cemu_src_files:
+                    if cemu_src_file.endswith(".asm"):
+                        cemu_asm_files.append(os.path.join(cemu_src_root, cemu_src_file))
+        cemu_asm_files.sort()
+
+        # Each included file may declare, in a `# WIIXL_OFFSET_SYMBOL: <name>`
+        # comment anywhere in the file, a plain uint32_t C++ global (e.g.
+        # g_Gx2ShimTableOffset in wiixlaunch-botw/include/wiixlaunch/botw/
+        # gx2_imports.hpp) that wants ITS OWN starting offset within this
+        # appended block patched into it - each included file's shim table
+        # (if any) starts at its own byte offset, not necessarily
+        # `binary_size`, now that more than one file can be included. Since
+        # the ELF links at base 0, g_CodeCaveBase (computed at runtime - see
+        # main.cpp's WiiXLaunch_Cemu_Init) already equals wiixlaunch_binary's
+        # runtime address, so each table's runtime address is simply
+        # g_CodeCaveBase + <its own patched offset>.
+        offset_symbol_re = re.compile(r"WIIXL_OFFSET_SYMBOL:\s*(\S+)")
+        cemu_included_asm_content = ""
+        running_offset = binary_size
+        for asm_file_path in cemu_asm_files:
+            with open(asm_file_path, "r", encoding="utf-8") as f:
+                asm_text = f.read()
+
+            m = offset_symbol_re.search(asm_text)
+            if m:
+                symbol_addr = sym_dict.get(m.group(1))
+                if symbol_addr is not None:
+                    packed = struct.pack(">I", running_offset)
+                    payload_data = (payload_data[:symbol_addr] +
+                                     packed +
+                                     payload_data[symbol_addr + 4:])
+
+            rel_path = os.path.relpath(asm_file_path, root_dir)
+            cemu_included_asm_content += f"\n# --- Included from {rel_path} ---\n"
+            cemu_included_asm_content += asm_text + "\n"
+            running_offset += count_asm_words(asm_text) * 4
+
+        cemu_included_asm_size = running_offset - binary_size
+
+        # payload_data is fully patched (relocations excluded above, shim
+        # offsets just above) before it gets embedded as .int words - any
+        # patch that touches payload_data must happen before this loop.
         cemu_asm_content += "wiixlaunch_binary:\n"
         for i in range(0, binary_size, 4):
             word = struct.unpack(">I", payload_data[i:i+4])[0]
             cemu_asm_content += f"  .int 0x{word:08X}\n"
-            
+
+        # wiixlaunch_reloc_stub's own delta computation (binary_offset_from_table
+        # below) assumes a fixed byte distance back to wiixlaunch_binary's
+        # start - this included content sits in between, so its real assembled
+        # size has to be added in, or that computation silently corrupts itself
+        # (confirmed via a real crash: g_CodeCaveBase - set independently by
+        # WiiXLaunch_Cemu_Init's own bl+mflr trick - was fine, but the reloc
+        # stub's SEPARATE copy of the same delta was wrong, so it patched
+        # ADDR16_HA/LO relocations - e.g. WiiXLaunch_Init's very first
+        # `static bool initialized` check - with garbage).
+        cemu_asm_content += cemu_included_asm_content
+
         cemu_asm_content += "\nwiixlaunch_reloc_stub:\n"
         cemu_asm_content += "  stwu r1, -0x30(r1)\n"
         cemu_asm_content += "  stw r0, 0x24(r1)\n"
@@ -232,8 +325,18 @@ version = 7
             
         cemu_asm_content += "wiixlaunch_after_table:\n"
         cemu_asm_content += "  mflr r9\n"
-        
-        binary_offset_from_table = binary_size + 40
+
+        # wiixlaunch_reloc_table's own data (reloc_offsets, one .int per
+        # entry) sits between the `bl wiixlaunch_after_table` above and this
+        # label - `bl` jumps over it as code, but its bytes still shift
+        # wiixlaunch_after_table's actual position, same as
+        # cemu_included_asm_size above. Pre-existing gap in this formula
+        # (not something introduced this session) that simply never
+        # surfaced before because num_relocs happened to be 0 in every
+        # build tested until now - confirmed via direct measurement against
+        # the generated file (30 entries * 4 bytes = exactly the observed
+        # mismatch).
+        binary_offset_from_table = binary_size + cemu_included_asm_size + (num_relocs * 4) + 40
         binary_offset_h = binary_offset_from_table >> 16
         binary_offset_l = binary_offset_from_table & 0xFFFF
         
@@ -324,16 +427,6 @@ version = 7
             cemu_asm_content += f"# Entry Hook: redirect 0x{entry_hook:08X} -> wiixlaunch_codecave_start\n"
             cemu_asm_content += f".origin = 0x{entry_hook:08X}\n"
             cemu_asm_content += f"  b wiixlaunch_codecave_start\n\n"
-
-    cemu_src_dir = os.path.join(root_dir, "src", "cemu")
-    if os.path.exists(cemu_src_dir):
-        for root, _, files in os.walk(cemu_src_dir):
-            for file in sorted(files):
-                if file.endswith(".asm"):
-                    asm_file_path = os.path.join(root, file)
-                    with open(asm_file_path, "r", encoding="utf-8") as f:
-                        cemu_asm_content += f"# --- Included from src/cemu/{file} ---\n"
-                        cemu_asm_content += f.read() + "\n\n"
 
     cemu_asm_path = os.path.join(cemu_deploy_dir, f"patch_{project_name}.asm")
     if not os.path.exists(elf_path) and os.path.exists(cemu_asm_path):
