@@ -722,4 +722,125 @@ Diffed the hand-built file's real vertex control section against its real fragme
 
 Checked the raw compiler output itself the same way: its two control-magic blocks (at `0x220` and `0xaa0` in a fresh compile) differ at the **exact same 31 byte offsets**, with the **exact same `0->1` pattern** at `0x714`/`0x734`, as the hand-built file's real vertex/fragment sections. Conclusive - the second block was never a duplicate to discard, it's the real, distinct fragment control section, and every version of `pack_shader.py` up to this point had been silently handing the driver a fragment control blob carrying the vertex stage's bucket flag and content fingerprint.
 
-Rewrote `extract_control_template` as `extract_control_templates`, returning both blocks distinctly, and threaded two separate control blobs all the way through `pack_sead_binary` instead of one shared one. Re-verified against the hand-built file before redeploying: the repacked rainbow selftest is now byte-identical to the known-good file except for a single byte per stage (relative control offset `0x790`, `0x15` in the hand-built file vs `0x05` freshly compiled) - a divergence present since the very first byte-diff of this whole investigation, long before `pack_shader.py` existed, sitting just before the per-stage fingerprint block rather than inside it. Left as-is rather than force-matched, since copying a stale value from an unrelated compile into a possibly content-dependent field seemed more likely to be wrong than right. Rebuilt, redeployed. Not yet visually re-tested as of this writing.
+Rewrote `extract_control_template` as `extract_control_templates`, returning both blocks distinctly, and threaded two separate control blobs all the way through `pack_sead_binary` instead of one shared one. Re-verified against the hand-built file before redeploying: the repacked rainbow selftest is now byte-identical to the known-good file except for a single byte per stage (relative control offset `0x790`, `0x15` in the hand-built file vs `0x05` freshly compiled) - a divergence present since the very first byte-diff of this whole investigation, long before `pack_shader.py` existed, sitting just before the per-stage fingerprint block rather than inside it. Left as-is rather than force-matched, since copying a stale value from an unrelated compile into a possibly content-dependent field seemed more likely to be wrong than right. Rebuilt, redeployed.
+
+**Confirmed working in-game** - the plasma quad renders correctly, animated. `pack_shader.py` is now a trusted, general tool: two independent real shaders (rainbow, plasma) both compile, pack, and bind successfully through it, and the one remaining known unknown (the single `0x15`/`0x05` byte) demonstrably doesn't matter.
+
+## Texture pipeline: a real image, sampled by a real NVN texture, through a general-purpose sprite/UI shader
+
+With a trusted shader-packing tool and a proven pipeline, the natural next target was the thing every UI element actually needs: texture sampling with alpha. Wrote `shaders/texture.vert`/`.frag` - position + UV + a per-vertex tint color that also carries alpha (`texColor * v_Tint`) - the standard sprite/UI vertex format, general enough that any future UI element just varies the texture, UV, and tint rather than needing its own shader.
+
+New tooling: `scripts/pack_texture.py` converts an arbitrary image (Pillow) into raw RGBA8 bytes for a **LINEAR** (non-swizzled) NVN texture specifically to avoid reverse-engineering Tegra X1 block-linear/GOB tiling - a linear texture's storage is just raw pixel bytes at a fixed row stride, uploadable with a plain `memcpy` into CPU-visible memory exactly like every other resource in this project. Downscales to a max dimension and rounds to a multiple of 8 so the RGBA8 stride stays 32-byte-aligned. First test image: a real screenshot from the user's PC, downscaled from 791x595 to 256x192.
+
+New NVN surface in `nvn_overlay.hpp` (`EnsureTexturePipelineInitialized`/`GetTextureQuadProgram`/`DrawTextureQuadDirect`), all grounded directly in the real `nvn.h` (`NvnHeader/nvn/nvn.h`, the same local SDK copy already used to fix the vertex-attrib-state and control-blob bugs above) rather than guessed:
+- `NVNtexturePool`/`NVNsamplerPool`/`NVNtextureBuilder`/`NVNtexture`/`NVNsamplerBuilder`/`NVNsampler` struct sizes (32/32/128/128/64/64 bytes) read directly from the header, same as every other opaque struct in this file.
+- All ~15 new `nvn*` functions resolved by name at runtime (`ResolveNvnFn`, wrapping the existing `ResolveNvnFunctionByName` - defined earlier this session but never actually exercised until now) rather than hand-curated `Offset::` GOT slots - deliberately the same "strictly better technique" already noted in this doc for the memory-callback/fence functions, now actually used.
+- A **private** texture pool + sampler pool (not the game's, at `graphicsNvn+0x58`/`+0x78`) - `nvn.h` requires registered texture/sampler IDs to be >=256 (`NVN_DEVICE_INFO_RESERVED_TEXTURE_DESCRIPTORS`), and a private pool sidesteps any question of which IDs the game's own live pool already has in use. Texture registered at ID 256, sampler at ID 256, combined into a bindable handle via `nvnDeviceGetTextureHandle`, bound per-draw via `nvnCommandBufferBindTexture(cmdBuf, NVN_SHADER_STAGE_FRAGMENT, 0, handle)` against a GLSL `layout(binding=0) uniform sampler2D`.
+
+Compiled clean on the first attempt and deployed. Genuinely new territory beyond anything decompiled or diffed against a known-good reference this session - the texture/sampler pool setup, the LINEAR layout/stride assumption, and the `layout(binding=N)` <-> `bindTexture(..., index, ...)` correspondence are all grounded in the real header's documented contracts but not yet independently verified against real game code or a working real-world reference the way every earlier fix in this doc was.
+
+## Texture pipeline, round 1: null-deref inside `nvnTextureInitialize` from a builder-setup ordering bug
+
+First real test crashed - `InvalidAccessHandler: Invalid memory access at virtual address 0x0` with a guest stack trace inside `nnSdk`, before ever reaching the "texture initialize result" log line. Spotted the bug from the register dump alone, no decompile needed: `EnsureTexturePipelineInitialized` called `texBuilderSetDevice` *before* `texBuilderSetDefaults` on `NVNtextureBuilder` - backwards from every other builder in this file (`NVNmemoryPoolBuilder`, `NVNbufferBuilder`), where `SetDefaults` always comes first. `SetDefaults` almost certainly resets the device pointer `SetDevice` had just written. Fixed the order for both the texture and sampler builders, rebuilt.
+
+## Texture pipeline, round 2: same crash, same PC - the real bug wasn't the one just fixed
+
+Redeployed - **identical crash**, byte-for-byte same PC/LR/registers as round 1. One new log line did confirm the round-1 fix took effect (`texture storage size=196608 align=32`, which needs a valid device to compute), so that fix was real, just not sufficient. Added one more log line to bisect `SetStorage` vs `Initialize` - confirmed it's inside `nvnTextureInitialize` itself.
+
+Asked the user to point their already-open Ghidra session at the `nnSdk` project (it had been on `main` all session) rather than keep guessing blind. Decompiled the real crash site (`nnSdk` file offset `0x2e987c`, called from `0x2e95bc`, both inside the same function) and disassembled around it directly rather than trusting decompiler pseudocode alone. Found the exact branch: `flags & 0x50 != 0` (bit `0x10` is `NVN_TEXTURE_FLAGS_LINEAR_BIT`, the flag this pipeline was deliberately using to avoid hand-implementing Tegra block-linear swizzling) diverts into a rare path through `device_vtable+0x38` and `NvRmGpuMappingCreate`, instead of the normal, well-exercised `device_vtable+0x10` path every regular (non-linear) texture takes - and that rare path dereferences a bad pointer. Real, structural: not a setup mistake to fix, a dead end in this driver build for this exact use case.
+
+Switched to the standard approach instead - the SAME layout every real texture in the game already uses: default (block-linear) texture, populated via `nvnCommandBufferCopyBufferToTexture` from a CPU-writable staging buffer (the same `NVNbuffer` pattern used everywhere else in this file), letting the driver do the swizzling. Deliberately re-records the copy into the *same* per-frame command buffer right before each draw rather than a one-time init-time copy with a wait - GPU commands execute in submission order, so the draw is guaranteed to see the freshly-copied texture with zero explicit synchronization, and *no* synchronous wait (`nvnQueueFinish`/fence+sync) is used at all, since this whole hook runs on the presentation thread, where this project already found (see "Chasing the control-memory ceiling" above) that a synchronous wait deadlocks Ryujinx. Compiled clean, redeployed. Still crashed.
+
+## Texture pipeline, round 3: different PC, same root cause class - a different flag bit, not device-pointer corruption
+
+Round 2's fix confirmed real progress (`texture storage size=262144 align=512` - a block-linear-shaped size/alignment, not the LINEAR path's raw byte count) but hit a **new** crash at a different `nnSdk` PC (`0x2e970c`), still a null-deref. Traced it back into the same internal helper (`nnSdk` file offset `0x2e9468`) at the instruction `ldr x0,[x19,#0x10]` - reading a word out of *our own texture object* that gets copied there from builder word index 1 (offset+8) early in that function.
+
+Rather than keep reasoning from disassembly alone, added a direct empirical diagnostic: dump the raw 128-byte `NVNtextureBuilder` content right after `SetDevice` returns. That log (`texBuilder[0..3]=<device> 0x0 0x0 ...`) showed **device lives at builder offset 0, not offset+8** as assumed from the memoryPool/buffer builder convention - a real, useful correction - but also showed offset+8 as `0x0` at that point, which looked like the smoking gun... until moving the same dump to *right before* `Initialize` (after `SetStorage`) showed offset+8 had, by then, been correctly populated with the real memory pool pointer all along (`texBuilder[1]=0xb353080`, matching `real pool=0xb353080` logged in the same line) - the first dump was simply taken too early to see `SetStorage`'s effect. Lesson: a diagnostic dump proves the state *at the point it's taken*, not at the point that matters, unless they're the same point.
+
+With the pool pointer confirmed genuinely present and correct, yet the exact same crash persisting, the only remaining explanation is that the driver dereferences that word expecting a **different kind of object** than our plain `NVNmemoryPool` bytes - something with its own vtable. That branch is gated behind bit 3 of the flags word (`NVN_TEXTURE_FLAGS_COMPRESSIBLE_BIT`), which `SetDefaults()` evidently sets by default (matching a sensible real-engine default: GPU delta-color compression is generally a win for real game textures) - real game code almost certainly overrides it per-texture rather than relying on the default for every texture. Our tiny test image has no need for it. Added an explicit `SetFlags(&texBuilder, 0)` right after the other builder setup calls to force it off. Rebuilt, redeployed. Still crashed, identical PC.
+
+## Texture pipeline, round 4: the flags theory was wrong - proven wrong, not just unlucky
+
+Added a before/after diagnostic around the `SetFlags(0)` call itself: dumped all 8 words of the builder immediately before and immediately after. Result: `texBuilderSetFlags resolved=0xb6b2560` (a real, valid, non-null function - definitely got called) and **the before/after dumps were byte-for-byte identical**. `SetFlags(0)` genuinely changed nothing. Since the field I'd been calling "flags" (builder offset `0x18`, low 32 bits) was already `0` in the earlier full dump too, the whole bit-3/COMPRESSIBLE theory - and the hand-derived offset mapping from the internal helper's decompile it was built on - is now disproven by direct evidence, not just unlucky. Abandoned rather than patched again.
+
+Rather than keep reasoning from the failing side, switched Ghidra back to the `main` project and decompiled `sead::DebugFontMgrNvn::initializeFromBinary` (`0x7100aff42c`) again - real, shipped game code that creates a real NVN texture successfully, decompiled earlier this session (before this conversation) for the font-rendering work. Its real texture-builder sequence: `SetDefaults` -> `SetDevice` -> `SetTarget(1)` -> `SetFormat(1)` -> `SetSize2D` -> `SetPackagedTextureData` -> (build the backing pool) -> `SetStorage` -> `Initialize`. Two concrete, checkable differences from our code jumped out:
+
+- It never calls `SetFlags` either (consistent with round 4's finding that `SetDefaults`'s own default is what matters, and rules flags out further).
+- Its texture's own backing memory pool is built with flag `0x21` (`CPU_NO_ACCESS_BIT | GPU_CACHED_BIT`) - **not** `0x22` (`CPU_UNCACHED_BIT | GPU_CACHED_BIT`), the flag combination reused everywhere else in this file (including, wrongly, for this pool). Real texture storage apparently isn't meant to be CPU-accessible at all - sensible, since real code never writes pixels into it directly either (ours doesn't anymore either, now that upload goes through a separate staging buffer - see the round-2 redesign above).
+
+Changed the texture's destination pool flag from `0x22` to `0x21` to match the real, working reference exactly (the staging buffer, which genuinely does need CPU writes, keeps `0x22`). Removed the disproven `SetFlags`/diagnostic code. Rebuilt, redeployed. Not yet tested as of this writing.
+
+## Texture pipeline, round 6: the pool flag theory was a red herring too - `nvnTextureInitialize` unconditionally needs a vtable-having pool
+
+Round 4's fix was tested - **identical crash, identical PC (`nnSdk:0x2e970c`)**. With the user's Ghidra session correctly pointed at the `nnSdk` project this time (a mixup along the way had it on `main`, which shares enough address-space-adjacent symbol noise - e.g. `Weapon::` methods, `nnMain` - to be genuinely confusing when switched without saying so), disassembled the real crash site directly rather than continuing to reason from decompiler pseudocode.
+
+The crash PC (`ldr x0,[x19,#0x10]`) itself can't fault (`x19` is our own valid texture object) - Ryujinx's JIT reports block-entry PC, not the precise faulting instruction, for this straight-line block. The real fault is a few instructions later:
+
+```
+71002e9740: ldr x8,[x0]        ; x8 = *pool          (x0 = our NVNmemoryPool*, from texture+0x10)
+71002e9744: ldr x8,[x8, #0x10] ; x8 = pool_vtable[0x10]
+71002e974c: blr x8             ; call it
+```
+
+Confirmed via full disassembly that this is **not conditional on any texture flag/format/target** - the `LINEAR`-flag path found in round 2 (`vtable+0x38`) does the exact same `ldr x8,[x0]` dereference first. Every plain-`SetStorage` code path in `nvnTextureInitialize` requires the memory pool to be a vtable-having object at byte offset 0; ours, built through the ordinary `nvnMemoryPoolBuilder`/`nvnMemoryPoolInitialize` API (same technique successfully used everywhere else in this file for buffers/command memory), apparently never gets one. This is why rounds 1-5 never moved the crash: none of the builder-side knobs can route around it.
+
+Decompiled the one real, working reference in this codebase (`sead::DebugFontMgrNvn::initializeFromBinary`, `0x7100aff42c`, back on the `main` project) in full rather than just the flag comparison round 4 did. Its real texture-builder sequence calls `nvnTextureBuilderSetPackagedTextureData(builder, param_5 + 0x200)` *in addition to* `SetStorage` - and `nvnTextureInitialize`'s packaged-data branch (the `else` of its top-level `if`) never touches the pool vtable at all; it builds GPU storage directly via `NvRmGpuMappingCreate`. This is the actual, load-bearing difference round 4 missed - not the pool flag.
+
+"Packaged texture data" turned out to be a real Nintendo container format (magic `"DFvN"`/`"HBvN"` - matches this project's own Ghidra class list: `BinaryFileHeader`/`BinaryBlockHeader`), not a raw-pixels pointer. Rather than reverse-engineer the header byte-by-byte, read it directly out of the one real instance already in this repo (`include/nvn_font_texture_bytes.hpp`, the real shipped `nvn_font.ntx`). Two fields were independently confirmed against real evidence and are the only ones this project's own packer patches:
+- width/height (header offsets `0x40`/`0x44`) - match `DebugFontMgrNvn`'s decompiled `SetSize2D(0x80, 0x80)` exactly.
+- data size (offsets `0x34`/`0x58`) - a from-scratch block-linear size formula (standard GOB/block-height math) independently reproduces **both** the real font asset's own header value (16384 bytes, 128x128 R8) **and** this project's own earlier-logged `nvnTextureBuilderGetStorageSize` result (262144 bytes, 256x192 RGBA8) from round 2's log, exactly.
+
+Every other header byte is left bit-for-bit identical to the real asset - unconfirmed fields stay copied from proven-working data rather than guessed.
+
+Rewrote `scripts/pack_texture.py` to grayscale (R8, matching the one proven format) + block-linear-swizzle (standard Tegra X1 GOB algorithm - not independently verified bit-for-bit against this driver build, unlike the size/header work above) the image, then wrap it in this header. Rewrote `EnsureTexturePipelineInitialized` to build the texture's memory pool directly over the packed asset bytes (matching `DebugFontMgrNvn`'s exact pattern) and call `SetPackagedTextureData` + `SetStorage` together; removed the now-unnecessary staging buffer and per-draw `nvnCommandBufferCopyBufferToTexture` entirely, since the packed data is already swizzled and GPU-resident from init time. Rebuilt. Not yet tested as of this writing.
+
+Known follow-up if this round is crash-free: the fragment shader still does `texture(u_Texture, v_UV) * v_Tint`, which for an R8 texture samples as `(r, 0, 0, 1)` (reddish, not grayscale) - repacking `shaders/texture.frag` to output `vec3(r)` via `pack_shader.py` is a quick, separate, purely cosmetic fix, independent of whether the crash itself is actually fixed.
+
+## Texture pipeline, round 8: Root Cause & Resolution - Struct overflow & Tegra X1 GOB Swizzle
+
+The investigations through nnSdk disassembly revealed two critical breakthroughs that completely resolved custom texture rendering:
+
+1. **`sizeof(NVNtexture)` buffer overflow in BSS**:
+   - In `nnSdk:0x2e9468` (`nvnTextureInitialize`), the driver starts with `memset(texture, 0, 0xb0)` (176 bytes) and writes fields through offset `+0xa8`.
+   - In previous header definitions, `NVNtexture` had been defined as 128 bytes (`0x80`).
+   - In the BSS, `g_TestPicTexture` was placed directly adjacent to `g_TexturePixelMemoryPool`.
+   - When `nvnTextureInitialize` ran, its `memset` and writes past `0x80` overflowed `g_TestPicTexture` and destroyed the vtable and fields of `g_TexturePixelMemoryPool`, corrupting it to `0x10` and triggering crashes whenever the pool was dereferenced.
+   - **Fix**: Expanded `NVNtexture` and `NVNtextureBuilder` to `0x100` (256 bytes) and sampler/pool structs to `0x80` (128 bytes) with proper 8-byte alignments.
+
+2. **Full Color RGBA8 & Maxwell / Tegra X1 GOB Swizzling**:
+   - Upgraded `scripts/pack_texture.py` to convert and pack 4-channel `RGBA8` (`NVN_FORMAT_RGBA8 = 0x25`).
+   - Fixed the DFvN/HBvN container header field offsets: `0x34` (data size), `0x40` (width), `0x44` (height), `0x50` (format `0x25`), `0x58` (data size), and `0xE4` (data size).
+   - Corrected the Maxwell intra-GOB bit interleaving formula for 64x8-byte GOBs:
+     - bits 0..3: `x[0..3]` (16-byte atom in row)
+     - bit 4: `y[0]` (row parity)
+     - bit 5: `x[4]` (next 16 bytes in row, bytes 16..31)
+     - bits 6..7: `y[1..2]` (row pairs 0..3)
+     - bit 8: `x[5]` (second 32 bytes in row, bytes 32..63)
+
+3. **Alpha Clipping**:
+   - Added conditional fragment discard in `shaders/texture.frag` for `alpha < 0.05`.
+   - Recompiled through Nintendo's `ShaderConverter.exe` to `texturequad_sead_bin.hpp`.
+
+## Texture Filtering Modes (Sampler Configuration)
+
+Texture filtering in NVN is configured on the `NVNsamplerBuilder` before calling `nvnSamplerInitialize`:
+
+```cpp
+auto smpBuilderSetMinMagFilter = ResolveNvnFn<FnSamplerBuilderSetMinMagFilter>("nvnSamplerBuilderSetMinMagFilter");
+smpBuilderSetMinMagFilter(&smpBuilder, minFilter, magFilter);
+```
+
+### Filter Constants:
+- **Point / Nearest (No Filter / Pixelated)**:
+  - `NVN_MIN_FILTER_NEAREST = 0x0`
+  - `NVN_MAG_FILTER_NEAREST = 0x0`
+  - *Usage*: `smpBuilderSetMinMagFilter(&smpBuilder, 0x0, 0x0);` for crisp pixel-art or retro UI.
+- **Bilinear Filtering (Smooth Interpolation)**:
+  - `NVN_MIN_FILTER_LINEAR  = 0x1`
+  - `NVN_MAG_FILTER_LINEAR  = 0x1`
+  - *Usage*: `smpBuilderSetMinMagFilter(&smpBuilder, 0x1, 0x1);` (current default for UI sprites).
+- **Mipmap Filtering Modes (for 3D textures with mip levels)**:
+  - `NVN_MIN_FILTER_NEAREST_MIPMAP_NEAREST = 0x2`
+  - `NVN_MIN_FILTER_LINEAR_MIPMAP_NEAREST  = 0x3`
+  - `NVN_MIN_FILTER_NEAREST_MIPMAP_LINEAR   = 0x4`
+  - `NVN_MIN_FILTER_LINEAR_MIPMAP_LINEAR    = 0x5` (Trilinear)

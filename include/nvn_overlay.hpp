@@ -20,6 +20,8 @@
 #include <rainbow_sead_bin.hpp>
 #include <rainbowselftest_sead_bin.hpp>
 #include <plasma_sead_bin.hpp>
+#include <texturequad_sead_bin.hpp>
+#include <testpic_texture_bytes.hpp>
 #include <wiixl_quad_bnsh_bytes.hpp>
 #include <texture_shader_bnsh_bytes.hpp>
 #include <nvn_font_shader_bytes.hpp>
@@ -145,6 +147,27 @@ namespace Offset {
     constexpr uintptr_t kCommandBufferSetSamplerPool        = 0x25975f0;
     constexpr uintptr_t kCommandBufferSetShaderScratchMemory = 0x25975f8;
 
+    // Texture builder / texture pipeline slots - xref-anchored, all read
+    // directly from sead::DebugFontMgrNvn::initializeFromBinary's own real
+    // decompile (0x7100aff42c, PTR_pfnc_nvn*_* variable names Ghidra itself
+    // attached) rather than resolved by name at runtime. Switched to this
+    // after nvnTextureBuilderSetPackagedTextureData's by-name resolution
+    // (ResolveNvnFn) silently returned a non-null but WRONG function -
+    // resolved fine, called fine, but never actually set the builder's
+    // packaged-data field, so nvnTextureInitialize kept taking the same
+    // plain-storage vtable-crashing path as every earlier round. See
+    // docs/switch-nvn-findings.md, "Texture pipeline, round 7".
+    constexpr uintptr_t kTextureBuilderSetDevice     = 0x2596c10;
+    constexpr uintptr_t kTextureBuilderSetDefaults   = 0x2596c18;
+    constexpr uintptr_t kTextureBuilderSetTarget     = 0x2596c28;
+    constexpr uintptr_t kTextureBuilderSetSize2D     = 0x2596c50;
+    constexpr uintptr_t kTextureBuilderSetFormat     = 0x2596c68;
+    constexpr uintptr_t kTextureBuilderSetStorage    = 0x2596c98;
+    constexpr uintptr_t kTextureBuilderSetPackagedTextureData = 0x2596ca0;
+    constexpr uintptr_t kTextureInitialize           = 0x2596db0;
+    constexpr uintptr_t kTexturePoolRegisterTexture  = 0x2596b20;
+    constexpr uintptr_t kDeviceGetTextureHandle      = 0x2596898;
+
     // Real-archive pivot: rather than hand-parse wiixl_quad.bnsh's control/
     // code layout by hex-archaeology (two independent, well-reasoned attempts
     // failed completely - see findings doc), construct a real
@@ -226,6 +249,16 @@ struct NVNprogram         { alignas(8) uint8_t reserved[0x80]; };
 // Real size (64 bytes, nvn.h:364-366).
 struct NVNsync            { alignas(8) uint8_t reserved[0x40]; };
 
+// Struct sizes padded safely (NVNtexture is at least 0xb0/176 bytes as confirmed by
+// nvnTextureInitialize's memset(texture, 0, 0xb0)).
+struct NVNtexturePool     { alignas(8) uint8_t reserved[0x80]; };
+struct NVNsamplerPool     { alignas(8) uint8_t reserved[0x80]; };
+struct NVNtextureBuilder  { alignas(8) uint8_t reserved[0x100]; };
+struct NVNtexture         { alignas(8) uint8_t reserved[0x100]; };
+struct NVNsamplerBuilder  { alignas(8) uint8_t reserved[0x80]; };
+struct NVNsampler         { alignas(8) uint8_t reserved[0x80]; };
+using NVNtextureHandle = uint64_t;
+
 using NVNcommandHandle = uint64_t;
 
 // -----------------------------------------------------------------------
@@ -280,6 +313,72 @@ using FnCommandBufferBindUniformBuffer = void (*)(NVNcommandBuffer*, int stage, 
 using FnCommandBufferSetTexturePool    = void (*)(NVNcommandBuffer*, const void* texturePool);
 using FnCommandBufferSetSamplerPool    = void (*)(NVNcommandBuffer*, const void* samplerPool);
 using FnCommandBufferSetShaderScratchMemory = void (*)(NVNcommandBuffer*, const NVNmemoryPool* pool, ptrdiff_t offset, size_t size);
+
+// Texture/sampler pipeline (nvn.h signatures - resolved by name at runtime
+// via ResolveNvnFn, not hand-curated Offset:: slots, since none of these
+// were ever xref-hunted in the GOT and by-name resolution is the strictly
+// better technique this session already established for exactly this case).
+using FnTextureBuilderSetDevice   = void (*)(NVNtextureBuilder*, void* device);
+using FnTextureBuilderSetDefaults = void (*)(NVNtextureBuilder*);
+using FnTextureBuilderSetTarget   = void (*)(NVNtextureBuilder*, int32_t target);
+using FnTextureBuilderSetSize2D   = void (*)(NVNtextureBuilder*, int width, int height);
+using FnTextureBuilderSetFormat   = void (*)(NVNtextureBuilder*, int32_t format);
+using FnTextureBuilderSetFlags    = void (*)(NVNtextureBuilder*, uint32_t flags);
+using FnTextureBuilderSetStride   = void (*)(NVNtextureBuilder*, int64_t stride);
+using FnTextureBuilderGetStorageSize      = size_t (*)(const NVNtextureBuilder*);
+using FnTextureBuilderGetStorageAlignment = size_t (*)(const NVNtextureBuilder*);
+using FnTextureBuilderSetStorage  = void (*)(NVNtextureBuilder*, NVNmemoryPool*, ptrdiff_t offset);
+// Real signature confirmed from sead::DebugFontMgrNvn::initializeFromBinary's
+// decompile (0x7100aff42c): takes a raw CPU pointer into a real "packaged
+// texture data" asset (nn::util::BinaryFileHeader/BinaryBlockHeader
+// container - magic "DFvN"/"HBvN") - see docs/switch-nvn-findings.md,
+// "Texture pipeline, round 6", and scripts/pack_texture.py.
+using FnTextureBuilderSetPackagedTextureData = void (*)(NVNtextureBuilder*, const void*);
+using FnTextureInitialize         = uint8_t (*)(NVNtexture*, const NVNtextureBuilder*);
+
+using FnTexturePoolInitialize     = uint8_t (*)(NVNtexturePool*, const NVNmemoryPool*, ptrdiff_t offset, int numDescriptors);
+using FnTexturePoolRegisterTexture = void (*)(const NVNtexturePool*, int id, const NVNtexture*, const void* view);
+
+using FnSamplerBuilderSetDevice   = void (*)(NVNsamplerBuilder*, void* device);
+using FnSamplerBuilderSetDefaults = void (*)(NVNsamplerBuilder*);
+using FnSamplerBuilderSetMinMagFilter = void (*)(NVNsamplerBuilder*, int32_t min, int32_t mag);
+using FnSamplerBuilderSetWrapMode = void (*)(NVNsamplerBuilder*, int32_t s, int32_t t, int32_t r);
+using FnSamplerInitialize         = uint8_t (*)(NVNsampler*, const NVNsamplerBuilder*);
+
+using FnSamplerPoolInitialize     = uint8_t (*)(NVNsamplerPool*, const NVNmemoryPool*, ptrdiff_t offset, int numDescriptors);
+using FnSamplerPoolRegisterSampler = void (*)(const NVNsamplerPool*, int id, const NVNsampler*);
+
+using FnDeviceGetTextureHandle    = NVNtextureHandle (*)(const void* device, int textureID, int samplerID);
+using FnCommandBufferBindTexture  = void (*)(NVNcommandBuffer*, int32_t stage, int index, NVNtextureHandle handle);
+
+// Real, plain POD layout (nvn.h:4464-4484) - not opaque, so declared with
+// real fields rather than a reserved-byte blob like the driver-opaque types
+// above.
+struct NVNcopyRegion {
+    int32_t xoffset, yoffset, zoffset;
+    int32_t width, height, depth;
+};
+using FnCommandBufferCopyBufferToTexture = void (*)(NVNcommandBuffer*, uint64_t src, const NVNtexture* dstTexture, const void* dstView, const NVNcopyRegion* dstRegion, int flags);
+
+namespace NvnTexture {
+    constexpr int32_t kTarget2D          = 0x1;  // NVN_TEXTURE_TARGET_2D
+    constexpr int32_t kFormatRGBA8       = 0x25; // NVN_FORMAT_RGBA8
+    constexpr int32_t kFormatR8          = 0x1;  // NVN_FORMAT_R8 - diagnostic only, see docs/switch-nvn-findings.md
+    constexpr uint32_t kFlagsLinearBit   = 0x10; // NVN_TEXTURE_FLAGS_LINEAR_BIT
+    constexpr int32_t kMinFilterNearest  = 0x0;  // NVN_MIN_FILTER_NEAREST (Point / no filter)
+    constexpr int32_t kMinFilterLinear   = 0x1;  // NVN_MIN_FILTER_LINEAR (Bilinear)
+    constexpr int32_t kMagFilterNearest  = 0x0;  // NVN_MAG_FILTER_NEAREST (Point / no filter)
+    constexpr int32_t kMagFilterLinear   = 0x1;  // NVN_MAG_FILTER_LINEAR (Bilinear)
+    constexpr int32_t kWrapModeClampEdge = 0x7;  // NVN_WRAP_MODE_CLAMP_TO_EDGE
+    constexpr int32_t kShaderStageFragment = 0x1; // NVN_SHADER_STAGE_FRAGMENT
+    // Fixed for this NVN SDK/hardware generation per nvn.h's own doc comments
+    // (stated as concrete values there, not as "query this" placeholders,
+    // same confidence level as every other hand-authored constant in this
+    // file taken directly from nvn.h): reserved descriptor count and
+    // descriptor byte size for both texture and sampler pools.
+    constexpr int kReservedDescriptors   = 256;
+    constexpr int kDescriptorSize        = 32;
+}
 
 // Raw-quad pipeline: program/buffer/vertex-state setup and draw-time binds.
 // NVNshaderData - real NVN struct shape confirmed twice independently this
@@ -517,6 +616,11 @@ inline void* ResolveNvnFunctionByName(const char* nvnPrefixedName) {
     using FnResolveNvnByName = void* (*)(long, const char*);
     auto resolve = reinterpret_cast<FnResolveNvnByName>(sdkBase + 0x2e0534);
     return resolve(0, nvnPrefixedName);
+}
+
+template <typename Fn>
+inline Fn ResolveNvnFn(const char* nvnPrefixedName) {
+    return reinterpret_cast<Fn>(ResolveNvnFunctionByName(nvnPrefixedName));
 }
 
 // -----------------------------------------------------------------------
@@ -1833,6 +1937,362 @@ inline NVNprogram* GetRainbowSelftestProgram(void* graphicsNvn) {
     return g_LoadedRainbowSelftestProgram;
 }
 
+// -----------------------------------------------------------------------
+// Texture pipeline: a real image sampled by a real texture, bound through a
+// private texture/sampler pool (not the game's, at graphicsNvn+0x58/+0x78 -
+// registered texture/sampler IDs must be >=256 per nvn.h, and a private pool
+// sidesteps any question of which IDs the game's own live pool already
+// uses). Image comes from scripts/pack_texture.py -> include/testpic_texture_bytes.hpp.
+//
+// First attempt used a LINEAR (non-swizzled) texture layout specifically to
+// avoid implementing Tegra X1 block-linear/GOB swizzling from scratch -
+// crashed inside nvnTextureInitialize every time. Second attempt switched to
+// a normal (default, block-linear) texture populated via
+// nvnCommandBufferCopyBufferToTexture from a CPU-writable staging buffer -
+// STILL crashed, same PC, across 5 rounds of flag/format/target changes.
+//
+// Ghidra-decompiled the real internal implementation this time (nnSdk file
+// offset 0x2e9468, "Texture pipeline, round 6" in the findings doc): BOTH of
+// nvnTextureInitialize's internal code paths (block-linear vtable+0x10 AND
+// the LINEAR-flag vtable+0x38 path found earlier) unconditionally
+// dereference the supplied memory pool as a vtable-having C++ object -
+// `(**(pool->vtable + N))(pool, texture)` - and crash reading address 0x0
+// there. Nothing on the builder side (flags/format/target) can route around
+// this; it's not a setup mistake, it's a hard requirement of both plain-pool
+// code paths. The one real, working reference in this codebase
+// (sead::DebugFontMgrNvn::initializeFromBinary, 0x7100aff42c) instead calls
+// nvnTextureBuilderSetPackagedTextureData, which takes an entirely different
+// internal path (NvRmGpuMappingCreate) that never touches that vtable at
+// all - see scripts/pack_texture.py for the real container format this
+// requires and how its fields were confirmed.
+//
+// Packaged texture data is used as-is with no runtime copy: the pool is
+// built directly over the packed asset bytes (same pattern
+// DebugFontMgrNvn's real code uses for its own font atlas), already
+// block-linear swizzled at pack time - no staging buffer or per-draw
+// nvnCommandBufferCopyBufferToTexture needed anymore.
+// -----------------------------------------------------------------------
+namespace {
+    NVNmemoryPool g_TexturePixelMemoryPool;
+    NVNtexture    g_TestPicTexture;
+
+    alignas(4096) uint8_t g_TextureDescriptorPoolMemory[16384];
+    NVNmemoryPool g_TextureDescriptorMemoryPool;
+    NVNtexturePool g_TextureDescriptorPool;
+
+    alignas(4096) uint8_t g_SamplerDescriptorPoolMemory[16384];
+    NVNmemoryPool g_SamplerDescriptorMemoryPool;
+    NVNsamplerPool g_SamplerDescriptorPool;
+    NVNsampler    g_TestPicSampler;
+
+    NVNtextureHandle g_TestPicTextureHandle = 0;
+    bool g_TexturePipelineInitialized = false;
+
+    // General-purpose "sprite/UI" vertex format: position + UV + a tint
+    // color that also carries alpha - see shaders/texture.vert/.frag.
+    struct TextureVertex {
+        float x, y, z, w;
+        float u, v;
+        float r, g, b, a;
+    };
+    NVNvertexAttribState g_TextureQuadVertexAttribStates[3];
+    NVNvertexStreamState g_TextureQuadVertexStreamState;
+
+    constexpr size_t kTextureQuadDataPoolSize = 4096;
+    alignas(4096) uint8_t g_TextureQuadDataPoolMemory[kTextureQuadDataPoolSize];
+    NVNmemoryPool g_TextureQuadDataMemoryPool;
+    NVNbuffer     g_TextureQuadDataBuffer;
+
+    alignas(4096) uint8_t g_TextureQuadCodePoolMemory[65536];
+    NVNmemoryPool g_TextureQuadCodeMemoryPool;
+    NVNbuffer     g_TextureQuadCodeBuffer;
+    NVNprogram    g_TextureQuadProgramStorage{};
+    NVNprogram*   g_LoadedTextureQuadProgram = nullptr;
+    bool          g_TextureQuadProgramLoaded = false;
+}
+
+inline void EnsureTexturePipelineInitialized(void* graphicsNvn) {
+    if (g_TexturePipelineInitialized) return;
+    if (!graphicsNvn) return;
+    void* device = *reinterpret_cast<void**>(static_cast<uint8_t*>(graphicsNvn) + kGraphicsNvnDeviceOffset);
+    if (!device) return;
+
+    // Resolve all NVN functions by name through nnSdk's bootstrap table.
+    auto poolBuilderSetDefaults = ResolveNvnFn<FnMemoryPoolBuilderSetDefaults>("nvnMemoryPoolBuilderSetDefaults");
+    auto poolBuilderSetDevice   = ResolveNvnFn<FnMemoryPoolBuilderSetDevice>("nvnMemoryPoolBuilderSetDevice");
+    auto poolBuilderSetFlags    = ResolveNvnFn<FnMemoryPoolBuilderSetFlags>("nvnMemoryPoolBuilderSetFlags");
+    auto poolBuilderSetStorage  = ResolveNvnFn<FnMemoryPoolBuilderSetStorage>("nvnMemoryPoolBuilderSetStorage");
+    auto poolInitialize         = ResolveNvnFn<FnMemoryPoolInitialize>("nvnMemoryPoolInitialize");
+
+    auto texBuilderSetDevice   = ResolveNvnFn<FnTextureBuilderSetDevice>("nvnTextureBuilderSetDevice");
+    auto texBuilderSetDefaults = ResolveNvnFn<FnTextureBuilderSetDefaults>("nvnTextureBuilderSetDefaults");
+    auto texBuilderSetFlags    = ResolveNvnFn<FnTextureBuilderSetFlags>("nvnTextureBuilderSetFlags");
+    auto texBuilderSetTarget   = ResolveNvnFn<FnTextureBuilderSetTarget>("nvnTextureBuilderSetTarget");
+    auto texBuilderSetSize2D   = ResolveNvnFn<FnTextureBuilderSetSize2D>("nvnTextureBuilderSetSize2D");
+    auto texBuilderSetFormat   = ResolveNvnFn<FnTextureBuilderSetFormat>("nvnTextureBuilderSetFormat");
+    auto texBuilderSetStorage  = ResolveNvnFn<FnTextureBuilderSetStorage>("nvnTextureBuilderSetStorage");
+    auto texBuilderSetPackagedTextureData = ResolveNvnFn<FnTextureBuilderSetPackagedTextureData>("nvnTextureBuilderSetPackagedTextureData");
+    auto texInitialize         = ResolveNvnFn<FnTextureInitialize>("nvnTextureInitialize");
+    auto texPoolRegisterTexture = ResolveNvnFn<FnTexturePoolRegisterTexture>("nvnTexturePoolRegisterTexture");
+    auto deviceGetTextureHandle = ResolveNvnFn<FnDeviceGetTextureHandle>("nvnDeviceGetTextureHandle");
+
+    auto texBuilderGetStorageSize = ResolveNvnFn<FnTextureBuilderGetStorageSize>("nvnTextureBuilderGetStorageSize");
+    auto texBuilderGetStorageAlignment = ResolveNvnFn<FnTextureBuilderGetStorageAlignment>("nvnTextureBuilderGetStorageAlignment");
+    auto texPoolInitialize      = ResolveNvnFn<FnTexturePoolInitialize>("nvnTexturePoolInitialize");
+
+    auto smpBuilderSetDevice   = ResolveNvnFn<FnSamplerBuilderSetDevice>("nvnSamplerBuilderSetDevice");
+    auto smpBuilderSetDefaults = ResolveNvnFn<FnSamplerBuilderSetDefaults>("nvnSamplerBuilderSetDefaults");
+    auto smpBuilderSetMinMagFilter = ResolveNvnFn<FnSamplerBuilderSetMinMagFilter>("nvnSamplerBuilderSetMinMagFilter");
+    auto smpBuilderSetWrapMode = ResolveNvnFn<FnSamplerBuilderSetWrapMode>("nvnSamplerBuilderSetWrapMode");
+    auto smpInitialize         = ResolveNvnFn<FnSamplerInitialize>("nvnSamplerInitialize");
+
+    auto smpPoolInitialize      = ResolveNvnFn<FnSamplerPoolInitialize>("nvnSamplerPoolInitialize");
+    auto smpPoolRegisterSampler = ResolveNvnFn<FnSamplerPoolRegisterSampler>("nvnSamplerPoolRegisterSampler");
+
+    if (!poolBuilderSetDefaults || !poolBuilderSetDevice || !poolBuilderSetFlags || !poolBuilderSetStorage || !poolInitialize ||
+        !texBuilderSetDevice || !texBuilderSetDefaults || !texBuilderSetFlags || !texBuilderSetTarget || !texBuilderSetSize2D ||
+        !texBuilderSetFormat || !texBuilderSetStorage || !texBuilderSetPackagedTextureData ||
+        !texInitialize || !texPoolInitialize || !texPoolRegisterTexture ||
+        !smpBuilderSetDevice || !smpBuilderSetDefaults || !smpBuilderSetMinMagFilter || !smpBuilderSetWrapMode ||
+        !smpInitialize || !smpPoolInitialize || !smpPoolRegisterSampler || !deviceGetTextureHandle) {
+        WIIXL_LOG("NvnOverlay: texture pipeline function resolution failed (one or more null)");
+        return;
+    }
+
+    // 1. Memory pool built DIRECTLY over the packed asset bytes (header +
+    // already-swizzled pixel data) - matches DebugFontMgrNvn's real pattern
+    // exactly: the pool backs the SAME bytes the packaged-data pointer
+    // reads, rather than a separate scratch allocation. Flag 0x21
+    // (CPU_NO_ACCESS_BIT | GPU_CACHED_BIT) matches the real reference too;
+    // safe here since we never write into this pool after pack time (it's
+    // baked into the binary as a static const-shaped array).
+    NVNmemoryPoolBuilder pixelPoolBuilder{};
+    poolBuilderSetDefaults(&pixelPoolBuilder);
+    poolBuilderSetDevice(&pixelPoolBuilder, device);
+    poolBuilderSetFlags(&pixelPoolBuilder, 0x21);
+    // kTestPicTextureSize is already page-aligned (pack_texture.py pads the
+    // emitted array itself to a 4096 boundary) so the pool never claims
+    // bytes past the array's real allocation.
+    poolBuilderSetStorage(&pixelPoolBuilder, g_TestPicTextureBytes, kTestPicTextureSize);
+    int pixelPoolResult = poolInitialize(&g_TexturePixelMemoryPool, &pixelPoolBuilder);
+    WIIXL_LOG("NvnOverlay: texture pixel pool init result=%d (vtable=%p, gpuAddr=%p)",
+        pixelPoolResult,
+        *reinterpret_cast<void**>(&g_TexturePixelMemoryPool),
+        reinterpret_cast<void**>(&g_TexturePixelMemoryPool)[8]);
+    if (!pixelPoolResult) return;
+
+    // 2. Texture object - packaged-data path (see namespace comment above).
+    // SetDefaults before SetDevice - matches every other builder in this
+    // file (NVNmemoryPoolBuilder, NVNbufferBuilder).
+    NVNtextureBuilder texBuilder{};
+    texBuilderSetDefaults(&texBuilder);
+    texBuilderSetDevice(&texBuilder, device);
+    texBuilderSetTarget(&texBuilder, NvnTexture::kTarget2D);
+    texBuilderSetFormat(&texBuilder, NvnTexture::kFormatRGBA8);
+    texBuilderSetSize2D(&texBuilder, kTestPicTextureWidth, kTestPicTextureHeight);
+    texBuilderSetPackagedTextureData(&texBuilder, g_TestPicTextureBytes + kTestPicTextureHeaderSize);
+    texBuilderSetStorage(&texBuilder, &g_TexturePixelMemoryPool, kTestPicTextureHeaderSize);
+    {
+        const uint64_t* w = reinterpret_cast<const uint64_t*>(&texBuilder);
+        WIIXL_LOG("NvnOverlay: texBuilder: [0x0]=%p [0x8]=%p [0x10]=%p [0x50]=%p [0x58]=%p",
+            reinterpret_cast<void*>(w[0]), reinterpret_cast<void*>(w[1]),
+            reinterpret_cast<void*>(w[2]),
+            reinterpret_cast<void*>(w[10]), reinterpret_cast<void*>(w[11]));
+    }
+
+    size_t storageSize = texBuilderGetStorageSize ? texBuilderGetStorageSize(&texBuilder) : kTestPicTextureDataSize;
+    size_t storageAlign = texBuilderGetStorageAlignment ? texBuilderGetStorageAlignment(&texBuilder) : 512;
+    WIIXL_LOG("NvnOverlay: texture storage size=%u align=%u (packed data size=%u)",
+        static_cast<unsigned int>(storageSize), static_cast<unsigned int>(storageAlign),
+        static_cast<unsigned int>(kTestPicTextureDataSize));
+
+    uint8_t texInitResult = texInitialize(&g_TestPicTexture, &texBuilder);
+    WIIXL_LOG("NvnOverlay: texture initialize result=%d", texInitResult);
+    if (!texInitResult) return;
+
+    // 3. Private descriptor pools + registration (id must be >=256, the
+    // reserved-descriptor count - see NvnTexture::kReservedDescriptors).
+    NVNmemoryPoolBuilder descPoolBuilder{};
+    poolBuilderSetDefaults(&descPoolBuilder);
+    poolBuilderSetDevice(&descPoolBuilder, device);
+    poolBuilderSetFlags(&descPoolBuilder, 0x22);
+    poolBuilderSetStorage(&descPoolBuilder, g_TextureDescriptorPoolMemory, sizeof(g_TextureDescriptorPoolMemory));
+    int texDescPoolResult = poolInitialize(&g_TextureDescriptorMemoryPool, &descPoolBuilder);
+    WIIXL_LOG("NvnOverlay: texture descriptor pool init result=%d", texDescPoolResult);
+    if (!texDescPoolResult) return;
+
+    constexpr int kNumDescriptors = 320; // > 256 reserved + our one real slot, comfortable margin
+    uint8_t texPoolResult = texPoolInitialize(&g_TextureDescriptorPool, &g_TextureDescriptorMemoryPool, 0, kNumDescriptors);
+    WIIXL_LOG("NvnOverlay: texture pool init result=%d", texPoolResult);
+    if (!texPoolResult) return;
+
+    constexpr int kTextureId = NvnTexture::kReservedDescriptors; // 256, first non-reserved slot
+    texPoolRegisterTexture(&g_TextureDescriptorPool, kTextureId, &g_TestPicTexture, nullptr);
+
+    // 4. Sampler.
+    NVNsamplerBuilder smpBuilder{};
+    smpBuilderSetDefaults(&smpBuilder);
+    smpBuilderSetDevice(&smpBuilder, device);
+    smpBuilderSetMinMagFilter(&smpBuilder, NvnTexture::kMinFilterLinear, NvnTexture::kMagFilterLinear);
+    smpBuilderSetWrapMode(&smpBuilder, NvnTexture::kWrapModeClampEdge, NvnTexture::kWrapModeClampEdge, NvnTexture::kWrapModeClampEdge);
+    uint8_t smpInitResult = smpInitialize(&g_TestPicSampler, &smpBuilder);
+    WIIXL_LOG("NvnOverlay: sampler initialize result=%d", smpInitResult);
+    if (!smpInitResult) return;
+
+    NVNmemoryPoolBuilder smpDescPoolBuilder{};
+    poolBuilderSetDefaults(&smpDescPoolBuilder);
+    poolBuilderSetDevice(&smpDescPoolBuilder, device);
+    poolBuilderSetFlags(&smpDescPoolBuilder, 0x22);
+    poolBuilderSetStorage(&smpDescPoolBuilder, g_SamplerDescriptorPoolMemory, sizeof(g_SamplerDescriptorPoolMemory));
+    int smpDescPoolResult = poolInitialize(&g_SamplerDescriptorMemoryPool, &smpDescPoolBuilder);
+    WIIXL_LOG("NvnOverlay: sampler descriptor pool init result=%d", smpDescPoolResult);
+    if (!smpDescPoolResult) return;
+
+    uint8_t smpPoolResult = smpPoolInitialize(&g_SamplerDescriptorPool, &g_SamplerDescriptorMemoryPool, 0, kNumDescriptors);
+    WIIXL_LOG("NvnOverlay: sampler pool init result=%d", smpPoolResult);
+    if (!smpPoolResult) return;
+
+    constexpr int kSamplerId = NvnTexture::kReservedDescriptors; // 256
+    smpPoolRegisterSampler(&g_SamplerDescriptorPool, kSamplerId, &g_TestPicSampler);
+
+    // 5. Combined handle, bound in shaders via nvnCommandBufferBindTexture.
+    g_TestPicTextureHandle = deviceGetTextureHandle(device, kTextureId, kSamplerId);
+    WIIXL_LOG("NvnOverlay: texture handle=%p", reinterpret_cast<void*>(g_TestPicTextureHandle));
+
+    // 6. Vertex layout: position(vec4,loc0) + uv(vec2,loc1) + tint(vec4,loc2)
+    NvnFn<FnVertexAttribStateSetDefaults>(Offset::kVertexAttribStateSetDefaults)(&g_TextureQuadVertexAttribStates[0]);
+    NvnFn<FnVertexAttribStateSetFormat>(Offset::kVertexAttribStateSetFormat)(&g_TextureQuadVertexAttribStates[0], NvnFormat::kR32G32B32A32Float, 0);
+    NvnFn<FnVertexAttribStateSetStreamIndex>(Offset::kVertexAttribStateSetStreamIndex)(&g_TextureQuadVertexAttribStates[0], 0);
+
+    NvnFn<FnVertexAttribStateSetDefaults>(Offset::kVertexAttribStateSetDefaults)(&g_TextureQuadVertexAttribStates[1]);
+    NvnFn<FnVertexAttribStateSetFormat>(Offset::kVertexAttribStateSetFormat)(&g_TextureQuadVertexAttribStates[1], NvnFormat::kR32G32Float, 16);
+    NvnFn<FnVertexAttribStateSetStreamIndex>(Offset::kVertexAttribStateSetStreamIndex)(&g_TextureQuadVertexAttribStates[1], 0);
+
+    NvnFn<FnVertexAttribStateSetDefaults>(Offset::kVertexAttribStateSetDefaults)(&g_TextureQuadVertexAttribStates[2]);
+    NvnFn<FnVertexAttribStateSetFormat>(Offset::kVertexAttribStateSetFormat)(&g_TextureQuadVertexAttribStates[2], NvnFormat::kR32G32B32A32Float, 24);
+    NvnFn<FnVertexAttribStateSetStreamIndex>(Offset::kVertexAttribStateSetStreamIndex)(&g_TextureQuadVertexAttribStates[2], 0);
+
+    NvnFn<FnVertexStreamStateSetDefaults>(Offset::kVertexStreamStateSetDefaults)(&g_TextureQuadVertexStreamState);
+    NvnFn<FnVertexStreamStateSetStride>(Offset::kVertexStreamStateSetStride)(&g_TextureQuadVertexStreamState, sizeof(TextureVertex));
+
+    // 7. Vertex data buffer (own storage, same pattern as every other demo).
+    NVNmemoryPoolBuilder dataPoolBuilder{};
+    NvnFn<FnMemoryPoolBuilderSetDefaults>(Offset::kMemoryPoolBuilderSetDefaults)(&dataPoolBuilder);
+    NvnFn<FnMemoryPoolBuilderSetDevice>(Offset::kMemoryPoolBuilderSetDevice)(&dataPoolBuilder, device);
+    NvnFn<FnMemoryPoolBuilderSetFlags>(Offset::kMemoryPoolBuilderSetFlags)(&dataPoolBuilder, 0x22);
+    NvnFn<FnMemoryPoolBuilderSetStorage>(Offset::kMemoryPoolBuilderSetStorage)(&dataPoolBuilder, g_TextureQuadDataPoolMemory, sizeof(g_TextureQuadDataPoolMemory));
+    uint8_t dataPoolResult = NvnFn<FnMemoryPoolInitialize>(Offset::kMemoryPoolInitialize)(&g_TextureQuadDataMemoryPool, &dataPoolBuilder);
+    WIIXL_LOG("NvnOverlay: texture quad data pool init result=%d", dataPoolResult);
+    if (!dataPoolResult) return;
+
+    NVNbufferBuilder dataBufBuilder{};
+    NvnFn<FnBufferBuilderSetDefaults>(Offset::kBufferBuilderSetDefaults)(&dataBufBuilder);
+    NvnFn<FnBufferBuilderSetDevice>(Offset::kBufferBuilderSetDevice)(&dataBufBuilder, device);
+    NvnFn<FnBufferBuilderSetStorage>(Offset::kBufferBuilderSetStorage)(&dataBufBuilder, &g_TextureQuadDataMemoryPool, 0, sizeof(g_TextureQuadDataPoolMemory));
+    uint8_t dataBufResult = NvnFn<FnBufferInitialize>(Offset::kBufferInitialize)(&g_TextureQuadDataBuffer, &dataBufBuilder);
+    WIIXL_LOG("NvnOverlay: texture quad data buffer init result=%d", dataBufResult);
+    if (!dataBufResult) return;
+
+    g_TexturePipelineInitialized = true;
+    WIIXL_LOG("NvnOverlay: EnsureTexturePipelineInitialized OK");
+}
+
+inline NVNprogram* GetTextureQuadProgram(void* graphicsNvn) {
+    if (g_TextureQuadProgramLoaded) return g_LoadedTextureQuadProgram;
+    g_TextureQuadProgramLoaded = true;
+    g_LoadedTextureQuadProgram = LoadSeadBinaryProgram(
+        graphicsNvn, g_TextureQuadSeadBin, kTextureQuadSeadBinSize,
+        g_TextureQuadCodePoolMemory, sizeof(g_TextureQuadCodePoolMemory),
+        &g_TextureQuadCodeMemoryPool, &g_TextureQuadCodeBuffer,
+        &g_TextureQuadProgramStorage, "TextureQuad");
+    return g_LoadedTextureQuadProgram;
+}
+
+inline void DrawTextureQuadDirect(NVNcommandBuffer* cmdBuf, void* dstTexture) {
+    if (!g_TexturePipelineInitialized) return;
+    void* graphicsNvn = GetGraphicsNvnInstance();
+    if (!graphicsNvn) return;
+
+    NVNprogram* program = GetTextureQuadProgram(graphicsNvn);
+    if (!program) return;
+
+    void* mapped = NvnFn<FnBufferMap>(Offset::kBufferMap)(&g_TextureQuadDataBuffer);
+    if (!mapped) return;
+
+    // Top-left 1:1 aspect ratio quad on 16:9 display (X scaled by 9/16 to maintain square).
+    constexpr float kX0 = -0.92f;
+    constexpr float kX1 = -0.92f + 0.40f * (9.0f / 16.0f); // -0.695f
+    constexpr float kY0 =  0.50f;
+    constexpr float kY1 =  0.90f;
+
+    const TextureVertex verts[6] = {
+        {kX0, kY1, 0.0f, 1.0f,   0.0f, 0.0f,   1.0f, 1.0f, 1.0f, 1.0f},
+        {kX0, kY0, 0.0f, 1.0f,   0.0f, 1.0f,   1.0f, 1.0f, 1.0f, 1.0f},
+        {kX1, kY0, 0.0f, 1.0f,   1.0f, 1.0f,   1.0f, 1.0f, 1.0f, 1.0f},
+        {kX0, kY1, 0.0f, 1.0f,   0.0f, 0.0f,   1.0f, 1.0f, 1.0f, 1.0f},
+        {kX1, kY0, 0.0f, 1.0f,   1.0f, 1.0f,   1.0f, 1.0f, 1.0f, 1.0f},
+        {kX1, kY1, 0.0f, 1.0f,   1.0f, 0.0f,   1.0f, 1.0f, 1.0f, 1.0f},
+    };
+    __builtin_memcpy(mapped, verts, sizeof(verts));
+    armDCacheFlush(mapped, sizeof(verts));
+
+    uint64_t gpuBase = NvnFn<FnBufferGetAddress>(Offset::kBufferGetAddress)(&g_TextureQuadDataBuffer);
+
+    auto setRenderTargets      = NvnFn<FnCommandBufferSetRenderTargets>(Offset::kCommandBufferSetRenderTargets);
+    auto setViewport           = NvnFn<FnCommandBufferSetViewport>(Offset::kCommandBufferSetViewport);
+    auto setScissor            = NvnFn<FnCommandBufferSetScissor>(Offset::kCommandBufferSetScissor);
+    auto bindProgram           = NvnFn<FnCommandBufferBindProgram>(Offset::kCommandBufferBindProgram);
+    auto bindVertexAttribState = NvnFn<FnCommandBufferBindVertexAttribState>(Offset::kCommandBufferBindVertexAttribState);
+    auto bindVertexStreamState = NvnFn<FnCommandBufferBindVertexStreamState>(Offset::kCommandBufferBindVertexStreamState);
+    auto bindVertexBuffer      = NvnFn<FnCommandBufferBindVertexBuffer>(Offset::kCommandBufferBindVertexBuffer);
+    auto drawArrays            = NvnFn<FnCommandBufferDrawArrays>(Offset::kCommandBufferDrawArrays);
+    auto setTexturePool        = NvnFn<FnCommandBufferSetTexturePool>(Offset::kCommandBufferSetTexturePool);
+    auto setSamplerPool        = NvnFn<FnCommandBufferSetSamplerPool>(Offset::kCommandBufferSetSamplerPool);
+    auto bindTexture           = ResolveNvnFn<FnCommandBufferBindTexture>("nvnCommandBufferBindTexture");
+
+    // No per-draw copy needed anymore: the texture's storage pool is built
+    // directly over the packed (already block-linear swizzled) asset bytes
+    // at init time - see EnsureTexturePipelineInitialized and
+    // scripts/pack_texture.py.
+
+    const void* colorTargets[1] = { dstTexture };
+    if (setRenderTargets) setRenderTargets(cmdBuf, 1, colorTargets, nullptr, nullptr, nullptr);
+
+    int width = 1280;
+    int height = 720;
+    void* displayBuffer = *reinterpret_cast<void**>(static_cast<uint8_t*>(graphicsNvn) + 0x50);
+    if (displayBuffer) {
+        float fW = *reinterpret_cast<float*>(static_cast<uint8_t*>(displayBuffer) + 8);
+        float fH = *reinterpret_cast<float*>(static_cast<uint8_t*>(displayBuffer) + 12);
+        if (fW > 0.0f && fH > 0.0f) {
+            width = static_cast<int>(fW);
+            height = static_cast<int>(fH);
+        }
+    }
+
+    if (setViewport) setViewport(cmdBuf, 0, 0, width, height);
+    if (setScissor) setScissor(cmdBuf, 0, 0, width, height);
+
+    // Our own private texture/sampler pools, not the game's.
+    if (setTexturePool) setTexturePool(cmdBuf, &g_TextureDescriptorPool);
+    if (setSamplerPool) setSamplerPool(cmdBuf, &g_SamplerDescriptorPool);
+
+    constexpr uint32_t kStageMaskVertexFragment = 0x1 | 0x2;
+    constexpr int kPrimitiveTriangles = 4;
+
+    bindProgram(cmdBuf, reinterpret_cast<const NVNprogram*>(program), kStageMaskVertexFragment);
+    bindVertexAttribState(cmdBuf, 3, g_TextureQuadVertexAttribStates);
+    bindVertexStreamState(cmdBuf, 1, &g_TextureQuadVertexStreamState);
+    bindVertexBuffer(cmdBuf, 0, gpuBase, sizeof(verts));
+    if (bindTexture) bindTexture(cmdBuf, NvnTexture::kShaderStageFragment, 0, g_TestPicTextureHandle);
+    drawArrays(cmdBuf, kPrimitiveTriangles, 0, 6);
+
+    static uint32_t s_TextureDrawCount = 0;
+    if ((s_TextureDrawCount++ % 120) == 0) {
+        WIIXL_LOG("NvnOverlay: Texture quad drawn on swapchain texture %p (%dx%d, frame #%u)", dstTexture, width, height, s_TextureDrawCount);
+    }
+}
+
 inline void DrawBnshQuad(void* gameFramework, float r, float g, float b, float a);
 
 inline void DrawWithCapturedProgram(void* gameFramework, float r, float g, float b, float a) {
@@ -2328,7 +2788,7 @@ inline NVNcommandHandle HookedCommandBufferEndRecording(NVNcommandBuffer* cmdBuf
                     void* dstTexture = *reinterpret_cast<void**>(
                         static_cast<uint8_t*>(displayBuffer) + 0x28 + activeIdx * 8);
                     if (dstTexture) {
-                        DrawPlasmaQuadDirect(cmdBuf, dstTexture);
+                        DrawTextureQuadDirect(cmdBuf, dstTexture);
                     }
                 }
             }

@@ -18,6 +18,8 @@ WIIXL_HOOK_DEFINE_TRAMPOLINE(ProcDrawHook) {
             NvnOverlay::GetBnshProgram(graphicsNvn);
             NvnOverlay::GetRainbowSelftestProgram(graphicsNvn); // diagnostic only - see docs/switch-nvn-findings.md
             NvnOverlay::GetPlasmaProgram(graphicsNvn);
+            NvnOverlay::EnsureTexturePipelineInitialized(graphicsNvn);
+            NvnOverlay::GetTextureQuadProgram(graphicsNvn);
             NvnOverlay::EnsureEndRecordingHookInstalled();
         }
         Orig(gameFramework);
