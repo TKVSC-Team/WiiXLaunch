@@ -15,6 +15,7 @@ See [overview.md](/docs/overview.md) for detailed documentation.
 * **Single C++ Codebase**: Define hooks and memory patches once using ExLaunch-style syntax (`WIIXL_HOOK_DEFINE_TRAMPOLINE`, `Orig(...)`).
 * **Unified Config (`wiixlaunch.json`)**: Manage project settings, memory sizes, Switch NPDM permissions, and Wii U Title IDs in one file.
 * **ExLaunch Compatibility**: Support for function replacement, trampolines, and raw memory patching (`CodePatch::Nop`).
+* **Game Modules (`vender/wiixlaunch-botw`)**: Pre-reverse engineered API methods for easy executable modding.
 
 ---
 
