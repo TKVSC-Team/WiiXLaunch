@@ -13,3 +13,6 @@
 [submodule "vendor/libnotifications"]
 	path = vendor/libnotifications
 	url = https://github.com/wiiu-env/libnotifications.git
+[submodule "vendor/wiixlaunch-botw"]
+	path = vendor/wiixlaunch-botw
+	url = https://github.com/TKVSC-Team/wiixlaunch-botw

@@ -11,7 +11,19 @@ namespace Backend {
     static size_t g_TrampolineAllocated = 0;
 
     extern "C" uintptr_t g_CodeCaveBase;
+    extern "C" {
+        __attribute__((section(".data"))) inline uint32_t g_CemuHeapOffset = 0;
+    }
     
+    inline void* AllocCemuHeap(size_t size, size_t align = 256) {
+        static size_t s_allocated = 0;
+        uintptr_t base = g_CodeCaveBase + g_CemuHeapOffset;
+        uintptr_t current = base + s_allocated;
+        uintptr_t aligned = (current + (align - 1)) & ~(align - 1);
+        s_allocated = (aligned - base) + size;
+        return reinterpret_cast<void*>(aligned);
+    }
+
     inline void* AllocateTrampoline(size_t size) {
         if (g_TrampolineAllocated + size > TRAMPOLINE_POOL_SIZE) {
             return nullptr;
@@ -38,9 +50,13 @@ namespace Backend {
         uintptr_t p = addr & ~31;
         uintptr_t end = addr + size;
         for (; p < end; p += 32) {
-            asm volatile("dcbst 0, %0" : : "r"(p));
-            asm volatile("sync");
-            asm volatile("icbi 0, %0" : : "r"(p));
+            asm volatile(
+                "li 0, 0\n"
+                "dcbst 0, %0\n"
+                "sync\n"
+                "icbi 0, %0\n"
+                : : "r"(p) : "r0", "memory"
+            );
         }
         asm volatile("isync");
     }
