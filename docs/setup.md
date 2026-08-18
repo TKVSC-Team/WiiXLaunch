@@ -8,7 +8,7 @@
 * **devkitPro**, with the `devkitPPC` and `devkitA64` toolchains - required for Wii U, Cemu, and Switch builds. Install from [devkitpro.org](https://devkitpro.org/wiki/Getting_Started).
   * On Windows, if devkitPro isn't installed at the default `C:\devkitPro`, set `DEVKITPRO_WIN` to your install directory before building.
 * **Some form of Visual Studio (20XX)** (Windows only) - only needed if you're also building host-side tools like `tools/ring_log_reader` (see [Debugging](debugging.md)); the console mods themselves don't need it.
-* For Wii U: WUPS and libfunctionpatcher installed into your devkitPro environment. Both ship as submodules under `vendor/` - see their READMEs for `make install` instructions into `/opt/devkitpro`.
+* For Wii U: WUPS, libfunctionpatcher, and libnotifications installed into your devkitPro environment. All three ship as submodules under `vendor/`. On Linux, `scripts/setup_wiiu_deps.sh` builds and installs all three for you; on other platforms see their READMEs for `make install` instructions into `/opt/devkitpro`. libnotifications is what powers the on-screen toasts described in [Debugging](debugging.md).
 
 ## Getting the source
 
@@ -28,11 +28,11 @@ git submodule update --init --recursive
 
 Everything project-specific lives in [`wiixlaunch.json`](../wiixlaunch.json) at the repo root:
 
-* `project` - name, version, author, description.
+* `project` - name, version, author, description, and `debug` (controls `EXL_DEBUG` on the Switch build).
 * `memory` - heap/JIT/inline-pool sizes and the Cemu debug log buffer size.
 * `switch` - title ID, subsdk name, thread stack size/priority.
 * `wiiu` - the plugin's `.wps` filename and the target title IDs it patches.
-* `cemu` - the entry hook address and graphic pack path/version for your target game build. usually doesn't require changing, V208 is the only launchable version from my understanding.
+* `cemu` - the entry hook address, graphic pack path/version for your target game build, and `module_matches` (the `moduleMatches` field written into the generated `.asm` patch). usually doesn't require changing, V208 is the only launchable version from my understanding.
 
 Running `python scripts/generate_config.py` (the build scripts do this for you) turns this into generated headers under `build/generated/include/` and platform config files under `build/generated/switch/` - these are regenerated on every build, so edit `wiixlaunch.json`, not the generated files.
 
