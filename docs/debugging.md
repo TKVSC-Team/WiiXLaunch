@@ -56,6 +56,8 @@ The on-screen toasts that WUPS plugins show at load ("N hooks registered", etc.,
 ## Limitations
 Debug logs can be no longer than 200 characters. This is a limitation of the ring buffer method for Cemu. It's configurable in [`debug_log.hpp`](../include/wiixlaunch/debug_log.hpp), but I would recommend against changing it.
 
+If you're using the Cemu CoreInit logging, you must enable it (the third option under the "Logging" header on Cemu 2.6).
+
 ## `BotW::OSLog` is a different thing
 
 If you're using the [wiixlaunch-botw](https://github.com/TKVSC-Team/wiixlaunch-botw) module, you'll also see `WiiXLaunch::BotW::OSLog(...)` calls in its Cemu-side code (`gx2.hpp`, `fs.hpp`, etc). This is not `WIIXL_LOG` - it's a separate, Cemu-only logger that calls Cemu's own `OSReport` directly, and it's what the module's internals use for their own diagnostics. It doesn't write to the ring buffer, so `tools/ring_log_reader` won't show it; look for it in Cemu's own log window instead. Your own mod code should keep using `WIIXL_LOG`.
