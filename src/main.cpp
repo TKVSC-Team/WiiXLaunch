@@ -1,4 +1,7 @@
 #include <wiixlaunch.hpp>
+#include <wiixlaunch/botw/botw.hpp>
+
+using namespace WiiXLaunch::BotW;
 
 // Entry point called once at plugin/module load. Install your hooks here.
 extern "C" void WiiXLaunch_Init() {
@@ -15,7 +18,28 @@ extern "C" void WiiXLaunch_Init() {
     // Confirms the debug log pipeline works end-to-end on whichever platform this is.
     WIIXL_LOG("WiiXLaunch: init OK");
 
-    // Example: MyHook::Install(switchOffset, wiiuOffset);
+#if WIIXL_SWITCH
+    NVN::Init();
+    NVN::RegisterDrawCallback(OnRender);
+    NVN::OnInitialized([]() {
+        g_LogoTexture = NVN::CreateTexture(g_TestPicTextureBytes, kTestPicTextureSize);
+        WIIXL_LOG("WiiXLaunch: NVN logo texture initialized: %p", reinterpret_cast<void*>(g_LogoTexture));
+    });
+#elif WIIXL_CEMU
+    GX2::Init();
+    GX2::RegisterDrawCallback(OnRender);
+    GX2::OnInitialized([]() {
+        g_LogoTexture = GX2::LoadTexture("WiiXLaunch/logo.bin");
+    });
+// Would probably work on WUH, but I really can't be bothered unless someone finds a use for it. All you probably have to do is give it a proper texture path.
+// #elif WIIXL_WIIU
+//     GX2::Init();
+//     GX2::RegisterDrawCallback(OnRender);
+//     GX2::OnInitialized([]() {
+//         g_LogoTexture = GX2::CreateTexture(g_TestpicTextureBytes, kTestpicTextureSize, kTestpicTextureWidth, kTestpicTextureHeight);
+//         WIIXL_LOG("WiiXLaunch: GX2 logo texture initialized: %p", reinterpret_cast<void*>(g_LogoTexture));
+//     });
+#endif
 }
 
 // Cemu code caves are position-independent, so the trampoline pool needs its
