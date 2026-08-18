@@ -20,8 +20,13 @@ for d in vendor/wiixlaunch-*/; do
 done
 
 echo "Building Cemu payload (PowerPC)..."
+# -fno-pie -fno-pic, NOT -fPIE: see build_cemu.bat for the full explanation -
+# on this machine's devkitPPC (GCC 16.1.0), -fPIE emits GOT-indirect
+# (.got2 + R_PPC_REL32) addressing that deploy.py's relocation patching
+# doesn't handle, confirmed via two independent reproducible crashes and a
+# clean build of the sibling repo showing the same pattern on this toolchain.
 "$DKP_PPC_GXX" \
-  -std=gnu++20 -fPIE -msdata=none \
+  -std=gnu++20 -fno-pie -fno-pic -msdata=none \
   -D__CEMU__=1 -DWIIXL_CEMU=1 \
   -I include -I build/generated/include "${MODULE_FLAGS[@]}" \
   -nostartfiles -T scripts/cemu.ld -Wl,-q \

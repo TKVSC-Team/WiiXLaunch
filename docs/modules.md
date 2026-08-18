@@ -32,7 +32,7 @@ A module must live at `vendor/wiixlaunch-<name>` for the auto-discovery to find 
 
 ## Available modules
 
-* **[wiixlaunch-botw](https://github.com/TKVSC-Team/wiixlaunch-botw)** - Breath of the Wild. `Player` (equipped sword/shield/bow, position, attack-swing detection), `Actor` (name lookup, spawning), `Controller` (unified button/stick reads), `Camera` (position/look-at/up). See its README for the full API and per-platform coverage.
+* **[wiixlaunch-botw](https://github.com/TKVSC-Team/wiixlaunch-botw)** - Breath of the Wild. `Player` (equipped sword/shield/bow, position, attack-swing detection), `Actor` (name lookup, spawning), `Controller` (unified button/stick reads), `Camera` (position/look-at/up), `FS` (file read/write), `OSLog` (Cemu-only logging), and `NVN`/`GX2` (drawing your own textures and meshes into the game's render loop - see [Graphics Injection](graphics-injection.md)). See its README for per-platform coverage.
 
 ## Writing your own module
 

@@ -69,8 +69,10 @@ elseif(PLATFORM STREQUAL "CEMU")
     message(STATUS "Building WiiXLaunch for Cemu Code Cave (PowerPC)")
     add_compile_definitions(__CEMU__=1 WIIXL_CEMU=1)
 
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIE -msdata=none")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIE -msdata=none")
+    # -fno-pie -fno-pic, NOT -fPIE: see build_cemu.bat (the script actually
+    # used for this target) for the full explanation.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-pie -fno-pic -msdata=none")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-pie -fno-pic -msdata=none")
     set(CMAKE_EXE_LINKER_FLAGS "-nostartfiles -T ${CMAKE_CURRENT_SOURCE_DIR}/scripts/cemu.ld -Wl,-q")
 
     file(GLOB_RECURSE SOURCES "src/*.cpp")

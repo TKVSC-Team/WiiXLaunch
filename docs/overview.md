@@ -16,6 +16,7 @@ The framework hides the differences between three very different hooking mechani
 * [Hooks](hooks.md) - writing `WIIXL_HOOK_DEFINE_TRAMPOLINE` hooks, finding offsets, raw memory patches.
 * [Debugging](debugging.md) - `WIIXL_LOG`, and how it reaches you differently on each platform.
 * [Modules](modules.md) - optional, game-specific APIs (e.g. [wiixlaunch-botw](https://github.com/TKVSC-Team/wiixlaunch-botw)) added as submodules on top of the base framework.
+* [Graphics Injection](graphics-injection.md) - drawing your own textures and meshes into a game's render loop via `BotW::NVN` (Switch) and `BotW::GX2` (Wii U/Cemu).
 
 ## Layout
 
@@ -25,3 +26,7 @@ The framework hides the differences between three very different hooking mechani
 * `scripts/` - config generation and packaging.
 * `tools/` - host-side developer tools (see [Debugging](debugging.md)).
 * `wiixlaunch.json` - the one file that describes your mod: name, target title IDs, memory sizes.
+
+## Graphics injection R&D
+
+This project is a sandbox for the in-game UI/graphics-pipeline injection work described in [wiixlaunch-botw](https://github.com/TKVSC-Team/wiixlaunch-botw)'s TODO.md - see [Graphics Injection](graphics-injection.md) for the current API and how it works on each platform.

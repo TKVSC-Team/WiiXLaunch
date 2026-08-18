@@ -9,19 +9,11 @@
 #include <string_view>
 #elif WIIXL_WIIU
 #include <notifications/notifications.h>
+#elif WIIXL_CEMU
+#include <wiixlaunch/botw/cemu_logging.hpp>
 #endif
 
-// One log call, WIIXL_LOG(fmt, ...), routed to whatever's actually available
-// on each target. None of these platforms have a normal console:
-//   Switch: exlaunch's SvcLogger, via svcOutputDebugString (a debugger or
-//           emulator can pick it up).
-//   Wii U (Aroma): an on-screen notification toast - there's no log/console
-//           access without extra setup.
-//   Cemu: the CEMU codecave has no OS log access at all, so entries go into
-//           a ring buffer that a host-side tool (tools/ring_log_reader) polls
-//           out of process memory. Entries are free-form text framed by
-//           kEntryStart/kEntryEnd cookies, so the reader never needs to know
-//           your message shape or be recompiled for it.
+// Platform-specific logging: Switch (SvcLogger), Wii U (toast), Cemu (ring buffer).
 
 namespace WiiXLaunch::Debug {
 
@@ -29,7 +21,7 @@ constexpr uint32_t kMaxLogTextLen = 200; // per-call cap, shared by all platform
 
 #if WIIXL_CEMU
 
-constexpr uint64_t kBufferMagic = 0x5749495847313031ULL; // "WIIXG101"
+constexpr uint64_t kBufferMagic = 0x5749495847313031ULL;
 constexpr uint8_t kEntryStart[4] = { 'W', 'X', '[', '[' };
 constexpr uint8_t kEntryEnd[4]   = { 'W', 'X', ']', ']' };
 constexpr uint32_t kBufferCapacity = 4096;
@@ -37,7 +29,7 @@ constexpr uint32_t kBufferCapacity = 4096;
 struct LogRingBuffer {
     uint64_t magic;
 
-    volatile uint32_t writeIndex; // monotonically increasing byte offset; position = writeIndex % capacity
+    volatile uint32_t writeIndex;
     uint32_t capacity;
     volatile uint8_t data[kBufferCapacity];
 };
@@ -60,18 +52,7 @@ inline void WriteRingEntry(const char* text, int len) {
 
 #endif // WIIXL_CEMU
 
-// Hand-rolled in place of vsnprintf: the Cemu target is a freestanding
-// -nostartfiles binary (see build_cemu.bat/scripts/cemu.ld) - there's no
-// crt0, so .bss is never zeroed before WiiXLaunch_Init runs. newlib's
-// vsnprintf touches reentrancy/locale state that lives in .bss and assumes
-// it's zero-initialized; calling it here means it operates on whatever
-// garbage was already in that memory (the codecave is carved out of live
-// game memory, not freshly mapped), which corrupts something unrelated
-// instead of crashing at the call site itself. Kept libc-free on every
-// platform rather than just Cemu, both for consistency and so Switch/Wii U
-// don't quietly grow a dependency on this working correctly there too.
-// Supports exactly what WIIXL_LOG call sites in this codebase use: %s, %p,
-// %d, %u, %x/%X, %f (with optional .N precision), %%.
+// Libc-free formatter (no crt0 in Cemu); supports %s, %p, %d, %u, %x/%X, %f, %%.
 namespace impl {
 
 inline void AppendChar(char* buf, uint32_t& len, uint32_t cap, char c) {
@@ -130,13 +111,9 @@ inline void AppendFloat(char* buf, uint32_t& len, uint32_t cap, double value, in
 
 }
 
-inline void DebugPrint(const char* fmt, ...) {
-    char text[kMaxLogTextLen];
+// Shared libc-free formatter; cap should leave room for null terminator.
+inline uint32_t FormatText(char* text, uint32_t cap, const char* fmt, va_list args) {
     uint32_t len = 0;
-    constexpr uint32_t cap = sizeof(text) - 1; // leaves room for the null terminator below
-
-    va_list args;
-    va_start(args, fmt);
 
     for (const char* p = fmt; *p != '\0'; p++) {
         if (*p != '%') {
@@ -178,16 +155,32 @@ inline void DebugPrint(const char* fmt, ...) {
         }
     }
 
+    return len;
+}
+
+inline void DebugPrint(const char* fmt, ...) {
+    char text[kMaxLogTextLen];
+    constexpr uint32_t cap = sizeof(text) - 1;
+
+    va_list args;
+    va_start(args, fmt);
+    uint32_t len = FormatText(text, cap, fmt, args);
     va_end(args);
-    text[len] = '\0'; // NotificationModule_AddInfoNotification needs a C string; harmless elsewhere
+
+    text[len] = '\0';
     if (len == 0) return;
 
 #if WIIXL_SWITCH
-    exl::log::Logging.Log(std::string_view{ text, static_cast<size_t>(len) });
+    ::Logging.Log(std::string_view{ text, static_cast<size_t>(len) });
 #elif WIIXL_WIIU
     NotificationModule_AddInfoNotification(text);
 #elif WIIXL_CEMU
     WriteRingEntry(text, len);
+    using OSReportFn = void (*)(const char*, ...);
+    auto osReport = WiiXLaunch::Backend::ResolveCemuLogging<OSReportFn>(WiiXLaunch::Backend::CemuLogImport::OSReport);
+    if (osReport) {
+        osReport("%s\n", text);
+    }
 #endif
 }
 

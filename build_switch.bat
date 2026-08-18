@@ -42,4 +42,20 @@ copy /y "%STAGE%\deploy\subsdk9" build\switch\subsdk9 > nul
 copy /y "%STAGE%\deploy\main.npdm" build\switch\main.npdm > nul
 
 python scripts\deploy.py
+
+:: deploy.py only writes deploy\switch\atmosphere\contents\... - it never
+:: touches Ryujinx's actual mods folder. That gap meant every test this
+:: session after the mods copy was last done by hand kept re-running the
+:: SAME stale subsdk9 no matter what changed in source, which cost a lot of
+:: debugging time chasing phantom "identical behavior across different code"
+:: symptoms that were really just "never rebuilt." Copy straight into the
+:: mods folder here so `main.npdm`/`subsdk9` in Ryujinx are always what was
+:: just compiled.
+set RYUJINX_MOD_EXEFS=%APPDATA%\Ryujinx\mods\contents\01007EF00011E000\NVNInjectionTest\exefs
+if exist "%RYUJINX_MOD_EXEFS%" (
+    copy /y "deploy\switch\atmosphere\contents\01007EF00011E000\exefs\subsdk9" "%RYUJINX_MOD_EXEFS%\subsdk9" > nul
+    copy /y "deploy\switch\atmosphere\contents\01007EF00011E000\exefs\main.npdm" "%RYUJINX_MOD_EXEFS%\main.npdm" > nul
+    echo Copied to Ryujinx mods folder: %RYUJINX_MOD_EXEFS%
+)
+
 echo Switch build complete!
