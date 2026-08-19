@@ -29,12 +29,16 @@ namespace WiiXLaunch::Backend {
 
 extern "C" void WiiXLaunch_Init();
 
-extern "C" void exl_main(void* x0, void* x1) {
+// Weak: this header is included from every game TU (it rides in via the
+// umbrella wiixlaunch.hpp), so a multi-file project would otherwise hit
+// "multiple definition of exl_main" at link. All copies are identical;
+// weak linkage lets the linker keep one.
+extern "C" __attribute__((weak)) void exl_main(void* x0, void* x1) {
     exl::hook::Initialize();
     WiiXLaunch_Init();
 }
 
-extern "C" NORETURN void exl_exception_entry() {
+extern "C" __attribute__((weak)) NORETURN void exl_exception_entry() {
     EXL_ABORT("Default exception handler called!");
 }
 #endif
