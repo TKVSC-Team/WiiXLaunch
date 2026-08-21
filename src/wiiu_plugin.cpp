@@ -12,6 +12,7 @@
 #include <notifications/notifications.h>
 #include <wiixlaunch/generated_wiiu_config.hpp>
 #include <wiixlaunch/wiiu/wiiu_backend.hpp>
+#include <wiixlaunch/time.hpp>
 #include <cstdio>
 
 WUPS_PLUGIN_NAME(WUPS_PLUGIN_NAME_STR);
@@ -30,7 +31,7 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpened(WUPSConfigCategoryHandle roo
 
     // Static buffers: the config item may keep the pointer until the menu
     // closes, so these must outlive this callback.
-    static char lines[3][96];
+    static char lines[4][96];
     snprintf(lines[0], sizeof(lines[0]), "FunctionPatcher init: %s",
              B::g_BackendInitOk ? "OK" : "FAILED");
     snprintf(lines[1], sizeof(lines[1]), "Hook patches: %lu ok / %lu failed%s%s",
@@ -39,6 +40,11 @@ static WUPSConfigAPICallbackStatus ConfigMenuOpened(WUPSConfigCategoryHandle roo
              B::g_PatchFailCount ? FunctionPatcher_GetStatusStr(B::g_LastPatchStatus) : "");
     snprintf(lines[2], sizeof(lines[2]), "Notification lib status: %d",
              (int)s_NotifyInitStatus);
+    // Re-read on every menu open, so this doubles as a liveness check on
+    // the console RTC rather than a value frozen at plugin load.
+    char clock[20];
+    WiiXLaunch::Time::FormatNow(clock, sizeof(clock));
+    snprintf(lines[3], sizeof(lines[3]), "System clock: %s", clock);
 
     for (auto& line : lines) {
         WUPSConfigItemStub_AddToCategory(root, line);

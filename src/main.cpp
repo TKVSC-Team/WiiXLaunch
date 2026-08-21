@@ -46,6 +46,12 @@ extern "C" void WiiXLaunch_Init() {
 
     WIIXL_LOG("WiiXLaunch: init OK");
 
+    // Proof the system clock is reachable: console RTC on hardware,
+    // host PC clock under Cemu. Reads "unavailable" on Switch.
+    char clock[20];
+    WiiXLaunch::Time::FormatNow(clock, sizeof(clock));
+    WIIXL_LOG("WiiXLaunch: system clock %s", clock);
+
 #if WIIXL_SWITCH
     NVN::Init();
     NVN::RegisterDrawCallback(OnRender);
