@@ -19,8 +19,15 @@ include $(DEVKITPRO)/wups/share/wups_rules
 WUT_ROOT  := $(DEVKITPRO)/wut
 WUMS_ROOT := $(DEVKITPRO)/wums
 
-# TARGET must match wiiu.plugin_name in wiixlaunch.json (without the .wps)
-TARGET		:=	BotW_SampleMod
+# TARGET is passed in on the make command line by build_wiiu.bat/.sh, which read
+# it from wiiu.plugin_name in wiixlaunch.json. It is deliberately NOT defaulted
+# here: the plugin name has to agree between this Makefile's output
+# ($(TARGET).wps) and the copy step in those scripts, and a hardcoded name in
+# both places is a name that eventually drifts - which is exactly what happened
+# when the project was renamed.
+ifeq ($(strip $(TARGET)),)
+$(error TARGET not set - build via build_wiiu.bat/.sh, which read wiiu.plugin_name from wiixlaunch.json. To run make directly: make TARGET=YourPluginName)
+endif
 BUILD		:=	build
 SOURCES		:=	src
 DATA		:=

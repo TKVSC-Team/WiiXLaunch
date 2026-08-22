@@ -8,6 +8,18 @@ echo Generating config...
 python scripts\generate_config.py
 if errorlevel 1 exit /b 1
 
+:: The plugin filename lives in exactly one place - wiiu.plugin_name in
+:: wiixlaunch.json - and is read from there rather than repeated here. It feeds
+:: the Makefile's TARGET (passed on the command line below) and the copy step at
+:: the end; hardcoding it in either spot is how it drifts on a rename.
+for /f "usebackq delims=" %%i in (`python -c "import json;print(json.load(open('wiixlaunch.json'))['wiiu']['plugin_name'])"`) do set "WPS_NAME=%%i"
+if not defined WPS_NAME (
+    echo [WiiXLaunch] Could not read wiiu.plugin_name from wiixlaunch.json
+    exit /b 1
+)
+:: Makefile's TARGET is the same name without the .wps extension
+set "WPS_TARGET=%WPS_NAME:.wps=%"
+
 :: devkitPro's make rules cannot handle spaces in paths, so stage the build in
 :: %TEMP% (space-free) instead of building in-place. See scripts/wiiu/Makefile.
 set STAGE=%TEMP%\wiixlaunch-wiiu
@@ -33,11 +45,11 @@ copy /y scripts\wiiu\Makefile "%STAGE%\Makefile" > nul
 :: installed from vendor/ (make install into /opt/devkitpro/wups and /wums).
 echo Building for Wii U (PowerPC)...
 set STAGEFWD=%STAGE:\=/%
-"%DKP_BASH%" -lc "cd '%STAGEFWD%' && make"
+"%DKP_BASH%" -lc "cd '%STAGEFWD%' && make TARGET='%WPS_TARGET%'"
 if errorlevel 1 exit /b 1
 
 if not exist build\wiiu mkdir build\wiiu
-copy /y "%STAGE%\BotW_SampleMod.wps" build\wiiu\BotW_SampleMod.wps > nul
+copy /y "%STAGE%\%WPS_NAME%" build\wiiu\%WPS_NAME% > nul
 if errorlevel 1 exit /b 1
 
 python scripts\deploy.py
