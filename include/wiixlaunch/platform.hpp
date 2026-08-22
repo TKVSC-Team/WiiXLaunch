@@ -5,6 +5,11 @@
 #if defined(__SWITCH__) || defined(NN_NINTENDO_SDK) || defined(__aarch64__)
     #define WIIXL_SWITCH 1
     #define WIIXL_WIIU   0
+    // Defined as 0 rather than left out, like the other two branches do. An
+    // undefined macro already evaluates to 0 in #if, so this changes nothing
+    // there - but it is what lets WIIXL_CEMU be used in ordinary C++, which
+    // `#if` cannot reach (e.g. reporting the platform in a JSON field).
+    #define WIIXL_CEMU   0
     #define WIIXL_64BIT  1
     #define WIIXL_32BIT  0
 #elif defined(__WIIU__) || defined(WUT) || (defined(__PPC__) && !defined(__CEMU__)) || defined(GEKKO)
