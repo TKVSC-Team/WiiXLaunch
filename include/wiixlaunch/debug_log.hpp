@@ -176,10 +176,25 @@ inline void DebugPrint(const char* fmt, ...) {
     NotificationModule_AddInfoNotification(text);
 #elif WIIXL_CEMU
     WriteRingEntry(text, len);
-    using OSReportFn = void (*)(const char*, ...);
-    auto osReport = WiiXLaunch::Backend::ResolveCemuLogging<OSReportFn>(WiiXLaunch::Backend::CemuLogImport::OSReport);
-    if (osReport) {
-        osReport("%s\n", text);
+
+    // Guard before resolving. CemuLoggingShimTable() is
+    // g_CodeCaveBase + g_CemuLoggingShimTableOffset and ResolveCemuLogging
+    // dereferences it unconditionally - unlike cemu_net.hpp's ResolveCemuNet,
+    // which checks CemuNetAvailable() first. Both values are zero until
+    // deploy.py patches them, so calling this before that happens reads
+    // through a null pointer and takes the process down. That is reachable
+    // three ways: a host build (tools/ws_test compiles this header as the Cemu
+    // target), a log emitted before the codecave base is computed, and a build
+    // with src/cemu/cemu_logging.asm removed.
+    //
+    // The ring buffer above is written either way, so nothing is lost when
+    // this is skipped - tools that read the ring still see the entry.
+    if (WiiXLaunch::Backend::g_CodeCaveBase != 0 && ::g_CemuLoggingShimTableOffset != 0) {
+        using OSReportFn = void (*)(const char*, ...);
+        auto osReport = WiiXLaunch::Backend::ResolveCemuLogging<OSReportFn>(WiiXLaunch::Backend::CemuLogImport::OSReport);
+        if (osReport) {
+            osReport("%s\n", text);
+        }
     }
 #endif
 }
